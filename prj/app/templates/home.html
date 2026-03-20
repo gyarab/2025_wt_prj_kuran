@@ -1,0 +1,12 @@
+{% extends "base.html" %}
+
+{% block content %}
+
+<h1>Welcome to the Home Page</h1>
+<p>This is a simple home page template for the Django project.</p>
+{% for movie in movies %}
+    <p>{{ movie.title }} ({{ movie.release_year }})</p>
+{% endfor %}
+
+
+{% endblock %}

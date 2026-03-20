@@ -1,0 +1,99 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1000 800">
+  <defs>
+    <filter id="shadow" x="-5%" y="-5%" width="110%" height="110%">
+      <feDropShadow dx="2" dy="2" stdDeviation="3" flood-opacity="0.2"/>
+    </filter>
+    <linearGradient id="headerGrad" x1="0%" y1="0%" x2="0%" y2="100%">
+      <stop offset="0%" style="stop-color:#34495e;stop-opacity:1" />
+      <stop offset="100%" style="stop-color:#2c3e50;stop-opacity:1" />
+    </linearGradient>
+    <linearGradient id="linkGrad" x1="0%" y1="0%" x2="0%" y2="100%">
+      <stop offset="0%" style="stop-color:#7f8c8d;stop-opacity:1" />
+      <stop offset="100%" style="stop-color:#95a5a6;stop-opacity:1" />
+    </linearGradient>
+  </defs>
+
+  <rect width="1000" height="800" fill="#f0f2f5" />
+
+  <style>
+    .entity-rect { fill: #ffffff; stroke: #2c3e50; stroke-width: 1; filter: url(#shadow); }
+    .header-rect { fill: url(#headerGrad); }
+    .link-rect { fill: url(#linkGrad); }
+    .title { font-family: 'Segoe UI', Arial, sans-serif; font-weight: bold; font-size: 14px; fill: #ffffff; }
+    .attr { font-family: 'Consolas', monospace; font-size: 11px; fill: #333; }
+    .line { stroke: #2c3e50; stroke-width: 1.5; fill: none; }
+    .crow { stroke: #2c3e50; stroke-width: 1.5; fill: none; }
+  </style>
+
+  <g transform="translate(50, 50)">
+    <rect width="180" height="90" rx="4" class="entity-rect" />
+    <rect width="180" height="30" rx="4" class="header-rect" />
+    <text x="10" y="20" class="title">DIRECTOR</text>
+    <text x="10" y="50" class="attr pk">ID</text>
+    <text x="10" y="65" class="attr">name </text>
+    <text x="10" y="80" class="attr">imdb_id </text>
+  </g>
+
+  <g transform="translate(350, 50)">
+    <rect width="220" height="150" rx="4" class="entity-rect" />
+    <rect width="220" height="30" rx="4" class="header-rect" />
+    <text x="10" y="20" class="title">MOVIE</text>
+    <text x="10" y="50" class="attr pk">ID</text>
+    <text x="10" y="65" class="attr">rating</text>
+    <text x="10" y="80" class="attr">title</text>
+    <text x="10" y="95" class="attr">imdb_id</text>
+    <text x="10" y="110" class="attr">release_year</text>
+    <text x="10" y="125" class="attr">duration</text>
+    <text x="10" y="140" class="attr">is_seen</text>
+  </g>
+
+  <g transform="translate(750, 50)">
+    <rect width="180" height="90" rx="4" class="entity-rect" />
+    <rect width="180" height="30" rx="4" class="header-rect" />
+    <text x="10" y="20" class="title">ACTOR</text>
+    <text x="10" y="50" class="attr pk">ID</text>
+    <text x="10" y="65" class="attr">name </text>
+    <text x="10" y="80" class="attr">birth_year </text>
+  </g>
+
+  <g transform="translate(580, 200)">
+    <rect width="140" height="85" rx="4" class="entity-rect" />
+    <rect width="140" height="30" rx="4" class="link-rect" />
+  </g>
+
+  <g transform="translate(750, 400)">
+    <rect width="180" height="70" rx="4" class="entity-rect" />
+    <rect width="180" height="30" rx="4" class="header-rect" />
+    <text x="10" y="20" class="title">GENRE</text>
+    <text x="10" y="50" class="attr pk">ID</text>
+    <text x="10" y="65" class="attr">name</text>
+  </g>
+
+  <g transform="translate(420, 400)">
+    <rect width="160" height="70" rx="4" class="entity-rect" />
+    <rect width="160" height="30" rx="4" class="link-rect" />
+  </g>
+
+
+  <line x1="230" y1="95" x2="350" y2="95" class="line" />
+  <line x1="240" y1="85" x2="240" y2="105" class="line" />
+  <path d="M 340 85 L 350 95 L 340 105" class="crow" />
+
+  <path d="M 570 125 L 650 125 L 650 200" class="line" />
+  <line x1="580" y1="115" x2="580" y2="135" class="line" />
+  <path d="M 640 190 L 650 200 L 660 190" class="crow" />
+
+  <path d="M 750 110 L 700 110 L 700 200" class="line" />
+  <line x1="740" y1="100" x2="740" y2="120" class="line" />
+  <path d="M 690 190 L 700 200 L 710 190" class="crow" />
+
+  <path d="M 460 200 L 460 400" class="line" />
+  <line x1="450" y1="210" x2="470" y2="210" class="line" />
+  <path d="M 450 390 L 460 400 L 470 390" class="crow" />
+
+  <line x1="750" y1="435" x2="580" y2="435" class="line" />
+  <line x1="740" y1="425" x2="740" y2="445" class="line" />
+  <path d="M 590 425 L 580 435 L 590 445" class="crow" />
+
+
+</svg>
