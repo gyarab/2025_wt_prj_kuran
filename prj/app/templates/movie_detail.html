@@ -8,6 +8,12 @@
 
 <h1>{{ movie.title }} <span style="color: #888;">({{ movie.release_year }})</span></h1>
 
+{% if plot_summary %}
+    <p style="font-size: 1.1em; line-height: 1.6; color: #ccc; max-width: 800px; margin-bottom: 30px; border-left: 4px solid #E50914; padding-left: 15px;">
+        <em>{{ plot_summary }}</em>
+    </p>
+{% endif %}
+
 <div style="margin: 30px 0;">
     {% if poster_url %}
         <img src="{{ poster_url }}" alt="Poster for {{ movie.title }}" class="movie-poster">
@@ -50,11 +56,15 @@
     <tr>
         <th>Cast:</th>
         <td>
-            {% for actor in movie.actors.all %}
-                <a href="{% url 'actor_detail' actor.id %}">{{ actor.name }}</a>{% if not forloop.last %}, {% endif %}
-            {% empty %}
-                No cast listed
-            {% endfor %}
+            <div class="cast-scroll-wrapper">
+                {% for actor in movie.actors.all %}
+                    <a href="{% url 'actor_detail' actor.id %}" class="cast-item">
+                        <span class="cast-name">{{ actor.name }}</span>
+                    </a>
+                {% empty %}
+                    <span style="color: #888;">No cast listed</span>
+                {% endfor %}
+            </div>
         </td>
     </tr>
 </table>

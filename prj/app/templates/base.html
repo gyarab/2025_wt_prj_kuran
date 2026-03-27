@@ -47,6 +47,49 @@
         }
         .btn:hover { background-color: #b20710; }
         
+        /* Kontejner, který omezuje šířku a zapíná scroll */
+        .cast-scroll-wrapper {
+            display: flex;
+            overflow-x: auto; /* Zapne vodorovný posun */
+            white-space: nowrap; /* Zakáže zalamování textu na další řádky */
+            padding: 10px 0;
+            gap: 15px; /* Mezera mezi herci */
+            scrollbar-width: thin; /* Tenký scrollbar pro Firefox */
+            scrollbar-color: #E50914 #141414; /* Červený posuvník na tmavém pozadí */
+        }
+
+        /* Styl pro samotný odkaz na herce */
+        .cast-item {
+            display: inline-block;
+            background: #1f1f1f;
+            padding: 8px 15px;
+            border-radius: 20px;
+            color: white;
+            text-decoration: none;
+            border: 1px solid #333;
+            transition: all 0.3s ease;
+        }
+
+        .cast-item:hover {
+            background: #E50914; /* Netflix červená při najetí */
+            border-color: #E50914;
+            transform: translateY(-2px);
+        }
+
+        /* Hezčí scrollbar pro Chrome, Edge a Safari */
+        .cast-scroll-wrapper::-webkit-scrollbar {
+            height: 6px;
+        }
+
+        .cast-scroll-wrapper::-webkit-scrollbar-thumb {
+            background: #444;
+            border-radius: 10px;
+        }
+
+        .cast-scroll-wrapper::-webkit-scrollbar-thumb:hover {
+            background: #E50914;
+        }
+
         input[type="text"] {
             padding: 10px;
             width: 300px;

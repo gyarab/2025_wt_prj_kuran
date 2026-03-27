@@ -1,24 +1,20 @@
 from django.contrib import admin
-from .models import Movie, Director, Actor, Genre
-
-@admin.register(Director)
-class DirectorAdmin(admin.ModelAdmin):
-    list_display = ('name', 'imdb_id')
-    search_fields = ('name', 'imdb_id')
-
-@admin.register(Movie)
-class MovieAdmin(admin.ModelAdmin):
-    list_display = ('title', 'release_year', 'rating', 'duration', 'is_seen', 'imdb_id')
-    list_filter = ('is_seen', 'release_year', 'rating')
-    search_fields = ('title', 'imdb_id')
-
+from .models import Movie, Actor, Director, Genre
 
 @admin.register(Actor)
 class ActorAdmin(admin.ModelAdmin):
-    list_display = ('name', 'birth_year')
-    search_fields = ('name',)
+    list_display = ('id', 'name') 
+
+@admin.register(Director)
+class DirectorAdmin(admin.ModelAdmin):
+    list_display = ('id', 'name')
 
 @admin.register(Genre)
 class GenreAdmin(admin.ModelAdmin):
-    list_display = ('name',)
-    search_fields = ('name',)
+    list_display = ('id', 'name')
+
+@admin.register(Movie)
+class MovieAdmin(admin.ModelAdmin):
+    list_display = ('title', 'imdb_id', 'release_year', 'is_seen')
+    list_filter = ('is_seen', 'genres')
+    search_fields = ('title', 'imdb_id')
