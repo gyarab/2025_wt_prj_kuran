@@ -78,3 +78,19 @@ Aplikace rozlišuje tři základní role uživatelů. <u>Anonymní návštěvní
 ## Licence
 
 Všechna práva vyhrazena. **Andreji sem ne**
+
+
+
+
+## .
+
+python -X utf8 manage.py dumpdata app.genre --format=yaml > genres.yaml
+python -X utf8 manage.py dumpdata app.actor --format=yaml > actors.yaml
+python -X utf8 manage.py dumpdata app.director --format=yaml > directors.yaml
+python -X utf8 manage.py dumpdata app.movie --format=yaml > movies.yaml
+
+
+python manage.py loaddata genres.yaml
+python manage.py loaddata actors.yaml
+python manage.py loaddata directors.yaml
+python manage.py loaddata movies.yaml
