@@ -57,22 +57,30 @@ class Command(BaseCommand):
 
         # 1. READ MOVIES (title.basics.tsv)
         self.stdout.write('1/5: Reading title.basics.tsv...')
+
+        # Get already imported movies
+        existing_ids = set(Movie.objects.values_list('imdb_id', flat=True))
+
         with open(basics_path, 'r', encoding='utf-8') as f:
             reader = csv.DictReader(f, delimiter='\t')
             for row in reader:
-                if row['titleType'] == 'movie':
-                    tconst = row['tconst']
-                    movies_data[tconst] = {
-                        'title': row['primaryTitle'][:255],
-                        'release_year': self.parse_int(row['startYear']),
-                        'duration': self.parse_int(row['runtimeMinutes']),
-                        'genres': row['genres'].split(',') if row['genres'] != r'\N' else [],
-                        'rating': None,
-                        'director_nconst': None,
-                        'actor_nconsts': []
-                    }
-                    if len(movies_data) >= limit:
-                        break
+                tconst = row['tconst']
+                # Skip if not a movie or already imported
+                if row['titleType'] != 'movie' or tconst in existing_ids:
+                    continue
+
+                movies_data[tconst] = {
+                    'title': row['primaryTitle'][:255],
+                    'release_year': self.parse_int(row['startYear']),
+                    'duration': self.parse_int(row['runtimeMinutes']),
+                    'genres': row['genres'].split(',') if row['genres'] != r'\N' else [],
+                    'rating': None,
+                    'director_nconst': None,
+                    'actor_nconsts': []
+                }
+
+                if len(movies_data) >= limit:
+                    break
 
         movie_tconsts = set(movies_data.keys())
 
