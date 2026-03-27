@@ -1,7 +1,7 @@
 import subprocess
 
 # How many times do you want the script to loop?
-TOTAL_RUNS = 10 
+TOTAL_RUNS = 100 
 LIMIT_PER_RUN = 500
 
 for i in range(TOTAL_RUNS):

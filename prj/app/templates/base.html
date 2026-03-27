@@ -3,12 +3,97 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>Home Page</title>
+    <title>Movie Database</title>
+    <style>
+        /* Global Background & Text */
+        body {
+            background-color: #141414; /* Deep cinematic black */
+            color: #e5e5e5; /* Soft white for readability */
+            font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;
+            margin: 0;
+            padding: 0;
+        }
+
+        /* The Main Wrapper */
+        .container {
+            max-width: 1000px;
+            margin: 0 auto;
+            padding: 30px;
+        }
+
+        h1, h2, h3 { color: #ffffff; }
+
+        /* Links & Accents (Cinematic Red) */
+        a {
+            color: #E50914; 
+            text-decoration: none;
+            transition: color 0.2s ease-in-out;
+        }
+        a:hover {
+            color: #ff0f1c;
+            text-decoration: underline;
+        }
+
+        /* Buttons & Search Bar */
+        .btn {
+            background-color: #E50914;
+            color: white;
+            padding: 10px 20px;
+            border: none;
+            border-radius: 4px;
+            cursor: pointer;
+            font-weight: bold;
+            font-size: 1em;
+        }
+        .btn:hover { background-color: #b20710; }
+        
+        input[type="text"] {
+            padding: 10px;
+            width: 300px;
+            border-radius: 4px;
+            border: 1px solid #333;
+            background-color: #2b2b2b;
+            color: white;
+            font-size: 1em;
+        }
+        input[type="text"]:focus { outline: 1px solid #E50914; }
+
+        /* Tables */
+        table {
+            width: 100%;
+            border-collapse: collapse;
+            margin-top: 20px;
+            background-color: #1f1f1f;
+            border-radius: 8px;
+            overflow: hidden; /* Keeps the rounded corners on the table */
+            box-shadow: 0 4px 15px rgba(0,0,0,0.5);
+        }
+        th, td {
+            padding: 15px;
+            text-align: left;
+            border-bottom: 1px solid #333;
+        }
+        th {
+            background-color: #000000;
+            color: #E50914;
+            text-transform: uppercase;
+            letter-spacing: 1px;
+            font-size: 0.9em;
+        }
+        tr:hover { background-color: #2b2b2b; } /* Highlight row on hover */
+
+        /* Poster Image */
+        .movie-poster {
+            border-radius: 8px;
+            box-shadow: 0 4px 20px rgba(229, 9, 20, 0.15);
+            max-width: 300px;
+        }
+    </style>
 </head>
 <body>
-    <a href="/">Home</a> | <a href="/about/">About</a>
-    <hr>
-    {% block content %}
-    {% endblock %}
+    <div class="container">
+        {% block content %}
+        {% endblock %}
+    </div>
 </body>
 </html>

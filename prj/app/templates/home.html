@@ -2,11 +2,62 @@
 
 {% block content %}
 
-<h1>Welcome to the Home Page</h1>
-<p>This is a simple home page template for the Django project.</p>
-{% for movie in movies %}
-    <p>{{ movie.title }} ({{ movie.release_year }})</p>
-{% endfor %}
+<h1>Movie Database</h1>
 
+<form method="GET" action="" style="margin-bottom: 30px;">
+    <input type="text" name="q" value="{{ query }}" placeholder="Search movie titles...">
+    <button type="submit" class="btn">Search</button>
+    
+    {% if query %}
+        <a href="/" style="margin-left: 15px; color: #aaa;">Clear Search</a>
+    {% endif %}
+</form>
+
+<table>
+    <thead>
+        <tr>
+            <th>Title</th>
+            <th>Release Year</th>
+            <th>Rating</th>
+            <th>Duration</th>
+        </tr>
+    </thead>
+    <tbody>
+        {% for movie in page_obj %}
+            <tr>
+                <td>
+                    <a href="{% url 'movie_detail' movie.imdb_id %}" style="font-weight: bold;">
+                        {{ movie.title }}
+                    </a>
+                </td>
+                <td>{{ movie.release_year|default:"-" }}</td>
+                <td>{{ movie.rating|default:"-" }}</td>
+                <td>{{ movie.duration|default:"-" }} min</td>
+            </tr>
+        {% empty %}
+            <tr>
+                <td colspan="4" style="text-align: center; color: #888;">No movies found matching your search.</td>
+            </tr>
+        {% endfor %}
+    </tbody>
+</table>
+
+<div style="margin-top: 30px; text-align: center; font-weight: bold;">
+    <span class="step-links">
+        {% if page_obj.has_previous %}
+            <a href="?page=1{% if query %}&q={{ query }}{% endif %}">&laquo; First</a> |
+            <a href="?page={{ page_obj.previous_page_number }}{% if query %}&q={{ query }}{% endif %}">Previous</a> |
+        {% endif %}
+
+        <span style="color: #888; margin: 0 10px;">
+            Page {{ page_obj.number }} of {{ page_obj.paginator.num_pages }}
+        </span>
+
+        {% if page_obj.has_next %}
+            | <a href="?page={{ page_obj.next_page_number }}{% if query %}&q={{ query }}{% endif %}">Next</a> |
+            <a href="?page={{ page_obj.paginator.num_pages }}{% if query %}&q={{ query }}{% endif %}">Last &raquo;</a>
+        {% endif %}
+    </span>
+</div>
 
 {% endblock %}

@@ -1,0 +1,40 @@
+{% extends "base.html" %}
+
+{% block content %}
+
+<div style="margin-bottom: 20px;">
+    <a href="javascript:history.back()">&larr; Back</a>
+</div>
+
+<h1>{{ person.name }} <span style="color: #888;">({{ role }})</span></h1>
+
+<h2 style="margin-top: 40px; border-bottom: 1px solid #333; padding-bottom: 10px;">Filmography</h2>
+
+<table>
+    <thead>
+        <tr>
+            <th>Title</th>
+            <th>Release Year</th>
+            <th>Rating</th>
+        </tr>
+    </thead>
+    <tbody>
+        {% for movie in movies %}
+            <tr>
+                <td>
+                    <a href="{% url 'movie_detail' movie.imdb_id %}" style="font-weight: bold;">
+                        {{ movie.title }}
+                    </a>
+                </td>
+                <td>{{ movie.release_year|default:"-" }}</td>
+                <td>{{ movie.rating|default:"-" }}</td>
+            </tr>
+        {% empty %}
+            <tr>
+                <td colspan="3" style="text-align: center; color: #888;">No movies found for this person.</td>
+            </tr>
+        {% endfor %}
+    </tbody>
+</table>
+
+{% endblock %}
