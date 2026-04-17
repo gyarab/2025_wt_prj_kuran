@@ -94,3 +94,9 @@ python manage.py loaddata genres.yaml
 python manage.py loaddata actors.yaml
 python manage.py loaddata directors.yaml
 python manage.py loaddata movies.yaml
+
+
+
+
+Set-ExecutionPolicy -ExecutionPolicy RemoteSigned -Scope CurrentUser
+.\venv\Scripts\Activate
