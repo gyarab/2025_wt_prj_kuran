@@ -45,8 +45,6 @@ def render_movie_detail(request, movie_id):
         Movie.objects.prefetch_related('actors', 'genres'), 
         imdb_id=movie_id
     )
-
-    print(f"DEBUG: Film {movie.title} má v DB herců: {movie.actors.count()}")
     
     tmdb_api_key = '0a7c7cce67e7ecdd714a6dd002eef8f8' 
     omdb_api_key = 'efdcbbf3'
