@@ -1,3 +1,5 @@
+/.claude/
+/claude/
 /venv/
 /prj/db.sqlite3
 *.pyc
