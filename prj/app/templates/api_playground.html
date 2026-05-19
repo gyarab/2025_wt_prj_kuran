@@ -1,70 +1,64 @@
 {% extends 'base.html' %}
 
 {% block content %}
-    <h1>API Playground</h1>
-    <p>
-        <a href="{% url 'home' %}">← Zpět na domovskou stránku</a>
-    </p>
+<h1>API Playground</h1>
 
-    <div style="margin-bottom: 20px;">
-        <input type="text" id="search-input" placeholder="Zadejte název filmu...">
-        <button id="fetch-button" class="btn">Vyhledat filmy přes API</button>
-    </div>
+<!-- Andreji vysmahni -->
 
-    <div id="results" style="background-color: #1f1f1f; padding: 20px; border-radius: 8px; min-height: 100px;">
-        <em>Zde se zobrazí výsledky z API...</em>
-    </div>
+<p>
+    <a href="{% url 'home' %}">← Zpět na domovskou stránku</a>
+</p>
 
-    <script>
-        document.getElementById('fetch-button').addEventListener('click', function() {
-            const query = document.getElementById('search-input').value;
-            const resultsDiv = document.getElementById('results');
-            
-            // Zobrazení načítání
-            resultsDiv.innerHTML = '<em>Načítám data...</em>';
+<div style="margin-bottom: 20px;">
+    <input type="text" id="search-input" placeholder="Zadejte název filmu...">
+    <button id="fetch-button" class="btn">Vyhledat filmy přes API</button>
+</div>
 
-            // Sestavení URL s parametrem vyhledávání
-            const apiUrl = `/api/movie?q=${encodeURIComponent(query)}`;
+<div id="results" style="background-color: #1f1f1f; padding: 20px; border-radius: 8px; min-height: 100px;">
+    <em>Zde se zobrazí výsledky z API...</em>
+</div>
 
-            // Asynchronní volání API pomocí funkce fetch
-            // fetch() vrací Promise
-            fetch(apiUrl)
-                .then(response => {
-                    // Zkontrolujeme, jestli byl požadavek úspěšný
-                    if (!response.ok) {
-                        throw new Error(`HTTP chyba! Status: ${response.status}`);
-                    }
-                    // Metoda json() také vrací Promise s parsovanými daty
-                    return response.json(); 
-                })
-                .then(data => {
-                    // Máme k dispozici data jako JavaScript objekt/pole
-                    if (data.length === 0) {
-                        resultsDiv.innerHTML = '<p>Nebyly nalezeny žádné filmy odpovídající dotazu.</p>';
-                        return;
-                    }
+<script>
+    document.getElementById('fetch-button').addEventListener('click', function () {
+        const query = document.getElementById('search-input').value;
+        const resultsDiv = document.getElementById('results');
 
-                    // Vygenerujeme HTML pro zobrazení dat
-                    let html = '<ul style="list-style-type: none; padding: 0;">';
-                    data.forEach(movie => {
-                        html += `
+        resultsDiv.innerHTML = '<em>Načítám data...</em>';
+
+        const apiUrl = `/api/movie?q=${encodeURIComponent(query)}`;
+
+
+        fetch(apiUrl)
+            .then(response => {
+                if (!response.ok) {
+                    throw new Error(`HTTP chyba! Status: ${response.status}`);
+                }
+                return response.json();
+            })
+            .then(data => {
+                if (data.length === 0) {
+                    resultsDiv.innerHTML = '<p>Nebyly nalezeny žádné filmy odpovídající dotazu.</p>';
+                    return;
+                }
+
+                let html = '<ul style="list-style-type: none; padding: 0;">';
+                data.forEach(movie => {
+                    html += `
                             <li style="margin-bottom: 10px; padding: 10px; background-color: #2b2b2b; border-radius: 4px;">
                                 <strong>${movie.title}</strong> 
                                 <span style="color: #aaa;">(${movie.release_year || 'Neznámý rok'})</span>
                                 <br>
                                 <small>IMDB ID: ${movie.imdb_id} | Hodnocení: ${movie.rating || 'N/A'}</small>
                             </li>`;
-                    });
-                    html += '</ul>';
-
-                    // Vložíme vygenerované HTML do připraveného kontejneru
-                    resultsDiv.innerHTML = html;
-                })
-                .catch(error => {
-                    // Zpracování případné chyby
-                    console.error('Chyba při načítání dat z API:', error);
-                    resultsDiv.innerHTML = `<p style="color: #E50914;">Došlo k chybě: ${error.message}</p>`;
                 });
-        });
-    </script>
+                html += '</ul>';
+
+                resultsDiv.innerHTML = html;
+            })
+            .catch(error => {
+                console.error('Chyba při načítání dat z API:', error);
+                resultsDiv.innerHTML = `<p style="color: #E50914;">Došlo k chybě: ${error.message}</p>`;
+            });
+    });
+</script>
 {% endblock %}
