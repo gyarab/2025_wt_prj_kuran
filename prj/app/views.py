@@ -165,3 +165,6 @@ def render_director_detail(request, director_id):
         'bio': bio,
         'photo_url': photo_url
     })
+
+def render_api_playground(request):
+    return render(request, 'api_playground.html')
