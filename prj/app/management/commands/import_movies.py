@@ -151,12 +151,10 @@ class Command(BaseCommand):
             director_objs = {}
             for nconst in needed_directors:
                 if nconst in person_data:
+                    person_name = person_data[nconst]['name']
                     dir_obj, _ = Director.objects.get_or_create(
                         imdb_id=nconst,
-                        defaults={
-                            'name': person_data[nconst]['name'],
-                            'birth_year': person_data[nconst]['birth_year']
-                        }
+                        defaults={"name": person_name}
                     )
                     director_objs[nconst] = dir_obj
 
@@ -164,11 +162,12 @@ class Command(BaseCommand):
             actor_objs = {}
             for nconst in needed_actors:
                 if nconst in person_data:
+                    person_name = person_data[nconst]['name']
                     # Your actor model doesn't have imdb_id, so we match by name/birth_year
                     # To avoid duplicates in re-runs, get_or_create is used
                     act_obj, _ = Actor.objects.get_or_create(
-                        name=person_data[nconst]['name'],
-                        birth_year=person_data[nconst]['birth_year']
+                        imdb_id=nconst,
+                        defaults={"name": person_name}
                     )
                     actor_objs[nconst] = act_obj
 

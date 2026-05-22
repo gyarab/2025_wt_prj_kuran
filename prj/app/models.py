@@ -7,11 +7,13 @@ class Genre(models.Model):
 
 class Actor(models.Model):
     name = models.CharField(max_length=255)
+    imdb_id = models.CharField(max_length=32, unique=True, null=True, blank=True)
     def __str__(self):
         return self.name
 
 class Director(models.Model):
     name = models.CharField(max_length=255)
+    imdb_id = models.CharField(max_length=32, unique=True, null=True, blank=True)
     def __str__(self):
         return self.name
 
