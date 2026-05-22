@@ -1,9 +1,8 @@
-/.claude/
-/claude/
 /venv/
 /prj/db.sqlite3
 *.pyc
 *.tsv
+node_modules/
 
 
 # Byte-compiled / optimized / DLL files
@@ -149,6 +148,8 @@ celerybeat.pid
 env/
 venv/
 ENV/
+/.claude/
+/claude/
 env.bak/
 venv.bak/
 
