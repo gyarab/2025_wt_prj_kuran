@@ -2,7 +2,7 @@ import os
 import csv
 from django.core.management.base import BaseCommand
 from django.db import transaction
-from app.models import Genre, Actor, Director, Movie  # Adjust 'app.models' if your app is named differently
+from app.models import Genre, Actor, Director, Movie
 
 class Command(BaseCommand):
     help = 'Imports a fraction of movies and related data from IMDb TSV files.'
@@ -17,7 +17,7 @@ class Command(BaseCommand):
         parser.add_argument(
             '--data-dir',
             type=str,
-            default=r'C:\Users\vladimir.kuran.s\Desktop\VSC\2025_wt_prj_kuran\data',
+            default='./data',
             help='Path to the directory containing IMDb TSV files'
         )
 
@@ -125,10 +125,7 @@ class Command(BaseCommand):
             for row in reader:
                 nconst = row['nconst']
                 if nconst in all_needed_people:
-                    person_data[nconst] = {
-                        'name': row['primaryName'][:255],
-                        'birth_year': self.parse_int(row['birthYear'])
-                    }
+                    person_data[nconst] = {'name': row['primaryName'][:255]}
                     # Small optimization: stop reading if we found everyone we need
                     if len(person_data) == len(all_needed_people):
                         break
@@ -163,8 +160,6 @@ class Command(BaseCommand):
             for nconst in needed_actors:
                 if nconst in person_data:
                     person_name = person_data[nconst]['name']
-                    # Your actor model doesn't have imdb_id, so we match by name/birth_year
-                    # To avoid duplicates in re-runs, get_or_create is used
                     act_obj, _ = Actor.objects.get_or_create(
                         imdb_id=nconst,
                         defaults={"name": person_name}

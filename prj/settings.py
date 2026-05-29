@@ -10,10 +10,13 @@ For the full list of settings and their values, see
 https://docs.djangoproject.com/en/6.0/ref/settings/
 """
 
+import os
 from pathlib import Path
 
-# Build paths inside the project like this: BASE_DIR / 'subdir'.
 BASE_DIR = Path(__file__).resolve().parent.parent
+
+TMDB_API_KEY = os.environ.get('TMDB_API_KEY', '0a7c7cce67e7ecdd714a6dd002eef8f8')
+OMDB_API_KEY = os.environ.get('OMDB_API_KEY', 'efdcbbf3')
 
 
 # Quick-start development settings - unsuitable for production
