@@ -1,6 +1,4 @@
 django
 django-ninja
-dj-database-url
-psycopg2-binary
 pyyaml
 requests
