@@ -2,6 +2,7 @@
 /prj/db.sqlite3
 *.pyc
 *.tsv
+*.tsv.gz
 node_modules/
 
 
