@@ -1,0 +1,9 @@
+body { font-family: sans-serif; max-width: 800px; margin: 0 auto; padding: 1rem; }
+header { border-bottom: 1px solid #ccc; margin-bottom: 1rem; }
+#search-form { display: flex; gap: 0.5rem; margin-bottom: 1rem; }
+#search-input { flex: 1; padding: 0.4rem; font-size: 1rem; }
+button { padding: 0.4rem 1rem; font-size: 1rem; cursor: pointer; }
+#results-list { list-style: none; padding: 0; }
+#results-list li { padding: 0.4rem 0; border-bottom: 1px solid #eee; }
+#results-list a { text-decoration: none; color: #0057b8; font-weight: bold; }
+#results-list a:hover { text-decoration: underline; }
