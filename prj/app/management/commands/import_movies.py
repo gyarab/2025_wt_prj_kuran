@@ -3,6 +3,7 @@ import gzip
 import os
 import shutil
 import urllib.request
+from concurrent.futures import ThreadPoolExecutor, as_completed
 
 from django.core.management.base import BaseCommand
 from django.db import transaction
@@ -23,21 +24,21 @@ class Command(BaseCommand):
     help = 'Import movies from IMDb TSV files. Use --download to fetch fresh data from IMDb.'
 
     def add_arguments(self, parser):
-        parser.add_argument('--limit', type=int, default=500,
-                            help='Number of movies to import (default: 500)')
+        parser.add_argument('--limit', type=int, default=5000,
+                            help='Number of movies to import per run (default: 5000)')
         parser.add_argument('--data-dir', type=str, default='./data',
                             help='Directory containing (or to download) IMDb TSV files')
         parser.add_argument('--download', action='store_true',
                             help='Download fresh IMDb data files before importing')
 
-    def _report(self, n, label):
-        self.stdout.write(f'  {n:,} {label}', ending='\r')
-        self.stdout.flush()
+    # ------------------------------------------------------------------
+    # Download helpers
+    # ------------------------------------------------------------------
 
     def download_files(self, data_dir):
         os.makedirs(data_dir, exist_ok=True)
         for filename in IMDB_FILES:
-            tsv_path = os.path.join(data_dir, filename[:-3])  # strip .gz
+            tsv_path = os.path.join(data_dir, filename[:-3])
             if os.path.exists(tsv_path):
                 self.stdout.write(f'  {filename[:-3]} already exists, skipping.')
                 continue
@@ -60,19 +61,51 @@ class Command(BaseCommand):
             self.stdout.write(f'  Done: {filename[:-3]}')
         self.stdout.write(self.style.SUCCESS('All files ready.'))
 
+    # ------------------------------------------------------------------
+    # TSV readers (run in parallel for ratings / crew / principals)
+    # ------------------------------------------------------------------
+
+    @staticmethod
+    def _read_ratings(path, tconsts):
+        result = {}
+        with open(path, encoding='utf-8') as f:
+            for row in csv.DictReader(f, delimiter='\t'):
+                if row['tconst'] in tconsts:
+                    v = row['averageRating']
+                    result[row['tconst']] = float(v) if v != r'\N' else None
+        return result
+
+    @staticmethod
+    def _read_crew(path, tconsts):
+        directors = {}   # tconst -> nconst
+        needed = set()
+        with open(path, encoding='utf-8') as f:
+            for row in csv.DictReader(f, delimiter='\t'):
+                if row['tconst'] in tconsts:
+                    parts = row['directors'].split(',')
+                    if parts and parts[0] != r'\N':
+                        directors[row['tconst']] = parts[0]
+                        needed.add(parts[0])
+        return directors, needed
+
+    @staticmethod
+    def _read_principals(path, tconsts):
+        actors = {}   # tconst -> [nconst]
+        needed = set()
+        with open(path, encoding='utf-8') as f:
+            for row in csv.DictReader(f, delimiter='\t'):
+                if row['tconst'] in tconsts and row['category'] in ('actor', 'actress'):
+                    actors.setdefault(row['tconst'], []).append(row['nconst'])
+                    needed.add(row['nconst'])
+        return actors, needed
+
+    # ------------------------------------------------------------------
+
     def parse_int(self, value):
         if value in (r'\N', ''):
             return None
         try:
             return int(value)
-        except ValueError:
-            return None
-
-    def parse_decimal(self, value):
-        if value in (r'\N', ''):
-            return None
-        try:
-            return float(value)
         except ValueError:
             return None
 
@@ -84,13 +117,12 @@ class Command(BaseCommand):
             self.stdout.write('--- Downloading IMDb data ---')
             self.download_files(data_dir)
 
-        basics_path = os.path.join(data_dir, 'title.basics.tsv')
-        ratings_path = os.path.join(data_dir, 'title.ratings.tsv')
-        crew_path = os.path.join(data_dir, 'title.crew.tsv')
-        principals_path = os.path.join(data_dir, 'title.principals.tsv')
-        names_path = os.path.join(data_dir, 'name.basics.tsv')
-
-        for path in (basics_path, ratings_path, crew_path, principals_path, names_path):
+        paths = {
+            name: os.path.join(data_dir, name)
+            for name in ('title.basics.tsv', 'title.ratings.tsv', 'title.crew.tsv',
+                         'title.principals.tsv', 'name.basics.tsv')
+        }
+        for path in paths.values():
             if not os.path.exists(path):
                 raise FileNotFoundError(
                     f'{path} not found. Run with --download to fetch IMDb files, '
@@ -99,16 +131,12 @@ class Command(BaseCommand):
 
         self.stdout.write(self.style.SUCCESS(f'--- Starting import (limit: {limit:,}) ---'))
 
-        movies_data = {}
-        needed_directors = set()
-        needed_actors = set()
-
         # 1. Basics
         self.stdout.write('1/5 Reading title.basics.tsv ...')
         existing_ids = set(Movie.objects.values_list('imdb_id', flat=True))
-        with open(basics_path, encoding='utf-8') as f:
-            reader = csv.DictReader(f, delimiter='\t')
-            for row in reader:
+        movies_data = {}
+        with open(paths['title.basics.tsv'], encoding='utf-8') as f:
+            for row in csv.DictReader(f, delimiter='\t'):
                 tconst = row['tconst']
                 if row['titleType'] != 'movie' or tconst in existing_ids:
                     continue
@@ -125,107 +153,117 @@ class Command(BaseCommand):
                     break
         self.stdout.write(f'  {len(movies_data):,} new movies collected.')
 
-        movie_tconsts = set(movies_data.keys())
+        if not movies_data:
+            self.stdout.write(self.style.SUCCESS('Nothing new to import.'))
+            return
 
-        # 2. Ratings
-        self.stdout.write('2/5 Reading title.ratings.tsv ...')
-        matched = 0
-        with open(ratings_path, encoding='utf-8') as f:
-            reader = csv.DictReader(f, delimiter='\t')
-            for row in reader:
-                if row['tconst'] in movie_tconsts:
-                    movies_data[row['tconst']]['rating'] = self.parse_decimal(row['averageRating'])
-                    matched += 1
-        self.stdout.write(f'  {matched:,} ratings matched.')
+        tconsts = frozenset(movies_data)
 
-        # 3. Directors
-        self.stdout.write('3/5 Reading title.crew.tsv ...')
-        matched = 0
-        with open(crew_path, encoding='utf-8') as f:
-            reader = csv.DictReader(f, delimiter='\t')
-            for row in reader:
-                if row['tconst'] in movie_tconsts:
-                    directors = row['directors'].split(',')
-                    if directors and directors[0] != r'\N':
-                        nconst = directors[0]
-                        movies_data[row['tconst']]['director_nconst'] = nconst
-                        needed_directors.add(nconst)
-                        matched += 1
-        self.stdout.write(f'  {matched:,} directors matched.')
+        # 2-4. Read ratings / crew / principals in parallel
+        self.stdout.write('2-4/5 Reading ratings, crew, principals in parallel ...')
+        needed_directors = set()
+        needed_actors = set()
 
-        # 4. Actors
-        self.stdout.write('4/5 Reading title.principals.tsv ...')
-        matched = 0
-        with open(principals_path, encoding='utf-8') as f:
-            reader = csv.DictReader(f, delimiter='\t')
-            for row in reader:
-                if row['tconst'] in movie_tconsts and row['category'] in ('actor', 'actress'):
-                    nconst = row['nconst']
-                    movies_data[row['tconst']]['actor_nconsts'].append(nconst)
-                    needed_actors.add(nconst)
-                    matched += 1
-        self.stdout.write(f'  {matched:,} actor roles matched.')
+        with ThreadPoolExecutor(max_workers=3) as pool:
+            fut_ratings = pool.submit(self._read_ratings, paths['title.ratings.tsv'], tconsts)
+            fut_crew = pool.submit(self._read_crew, paths['title.crew.tsv'], tconsts)
+            fut_principals = pool.submit(self._read_principals, paths['title.principals.tsv'], tconsts)
+
+            ratings = fut_ratings.result()
+            crew, needed_directors = fut_crew.result()
+            actor_map, needed_actors = fut_principals.result()
+
+        for tconst, rating in ratings.items():
+            movies_data[tconst]['rating'] = rating
+        for tconst, nconst in crew.items():
+            movies_data[tconst]['director_nconst'] = nconst
+        for tconst, nconsts in actor_map.items():
+            movies_data[tconst]['actor_nconsts'] = nconsts
+
+        self.stdout.write(f'  {len(ratings):,} ratings, {len(needed_directors):,} directors, '
+                          f'{len(needed_actors):,} actors.')
 
         # 5. Names
         self.stdout.write('5/5 Reading name.basics.tsv ...')
         person_data = {}
         all_needed = needed_directors | needed_actors
-        with open(names_path, encoding='utf-8') as f:
-            reader = csv.DictReader(f, delimiter='\t')
-            for row in reader:
-                nconst = row['nconst']
-                if nconst in all_needed:
-                    person_data[nconst] = {'name': row['primaryName'][:255]}
+        with open(paths['name.basics.tsv'], encoding='utf-8') as f:
+            for row in csv.DictReader(f, delimiter='\t'):
+                if row['nconst'] in all_needed:
+                    person_data[row['nconst']] = {'name': row['primaryName'][:255]}
                     if len(person_data) == len(all_needed):
                         break
         self.stdout.write(f'  {len(person_data):,} people resolved.')
 
-        # Write to DB
+        # ------------------------------------------------------------------
+        # Bulk DB writes
+        # ------------------------------------------------------------------
         self.stdout.write('Writing to database ...')
         with transaction.atomic():
-            all_genres = {g for md in movies_data.values() for g in md['genres']}
-            genre_objs = {
-                name: Genre.objects.get_or_create(name=name)[0]
-                for name in all_genres
-            }
 
-            director_objs = {}
-            for nconst in needed_directors:
-                if nconst in person_data:
-                    obj, _ = Director.objects.get_or_create(
-                        imdb_id=nconst,
-                        defaults={'name': person_data[nconst]['name']},
-                    )
-                    director_objs[nconst] = obj
+            # Genres
+            all_genre_names = {g for md in movies_data.values() for g in md['genres']}
+            Genre.objects.bulk_create(
+                [Genre(name=n) for n in all_genre_names],
+                ignore_conflicts=True,
+            )
+            genre_objs = {g.name: g for g in Genre.objects.filter(name__in=all_genre_names)}
 
-            actor_objs = {}
-            for nconst in needed_actors:
-                if nconst in person_data:
-                    obj, _ = Actor.objects.get_or_create(
-                        imdb_id=nconst,
-                        defaults={'name': person_data[nconst]['name']},
-                    )
-                    actor_objs[nconst] = obj
+            # Directors
+            Director.objects.bulk_create(
+                [Director(imdb_id=nc, name=person_data[nc]['name'])
+                 for nc in needed_directors if nc in person_data],
+                ignore_conflicts=True,
+            )
+            director_objs = {d.imdb_id: d for d in Director.objects.filter(imdb_id__in=needed_directors)}
 
-            for i, (tconst, data) in enumerate(movies_data.items(), 1):
-                movie, _ = Movie.objects.update_or_create(
+            # Actors
+            Actor.objects.bulk_create(
+                [Actor(imdb_id=nc, name=person_data[nc]['name'])
+                 for nc in needed_actors if nc in person_data],
+                ignore_conflicts=True,
+            )
+            actor_objs = {a.imdb_id: a for a in Actor.objects.filter(imdb_id__in=needed_actors)}
+
+            # Movies
+            Movie.objects.bulk_create(
+                [Movie(
                     imdb_id=tconst,
-                    defaults={
-                        'title': data['title'],
-                        'release_year': data['release_year'],
-                        'rating': data['rating'],
-                        'duration': data['duration'],
-                        'director': director_objs.get(data['director_nconst']),
-                    },
-                )
-                if data['genres']:
-                    movie.genres.set([genre_objs[g] for g in data['genres']])
-                if data['actor_nconsts']:
-                    movie.actors.set([actor_objs[n] for n in data['actor_nconsts'] if n in actor_objs])
-                if i % 100 == 0:
-                    self._report(i, f'/ {len(movies_data):,} movies written')
-            self.stdout.write('')
+                    title=data['title'],
+                    release_year=data['release_year'],
+                    rating=data['rating'],
+                    duration=data['duration'],
+                    director=director_objs.get(data['director_nconst']),
+                ) for tconst, data in movies_data.items()],
+                update_conflicts=True,
+                update_fields=['title', 'release_year', 'rating', 'duration', 'director'],
+                unique_fields=['imdb_id'],
+                batch_size=1000,
+            )
+            movie_objs = {m.imdb_id: m for m in Movie.objects.filter(imdb_id__in=tconsts)}
+
+            # M2M: genres
+            MovieGenre = Movie.genres.through
+            MovieGenre.objects.bulk_create(
+                [MovieGenre(movie_id=movie_objs[tc].id, genre_id=genre_objs[g].id)
+                 for tc, data in movies_data.items()
+                 for g in data['genres']
+                 if tc in movie_objs and g in genre_objs],
+                ignore_conflicts=True,
+                batch_size=2000,
+            )
+
+            # M2M: actors
+            MovieActor = Movie.actors.through
+            MovieActor.objects.bulk_create(
+                [MovieActor(movie_id=movie_objs[tc].id, actor_id=actor_objs[n].id)
+                 for tc, data in movies_data.items()
+                 for n in data['actor_nconsts']
+                 if tc in movie_objs and n in actor_objs],
+                ignore_conflicts=True,
+                batch_size=2000,
+            )
 
         self.stdout.write(self.style.SUCCESS(
-            f'Done. {len(movies_data):,} movies imported into the database.'
+            f'Done. {len(movies_data):,} movies imported.'
         ))
