@@ -96,7 +96,8 @@ python manage.py loaddata directors.yaml
 python manage.py loaddata movies.yaml
 
 
-
+python -m venv venv
+source venv/bin/activate
 
 Set-ExecutionPolicy -ExecutionPolicy RemoteSigned -Scope CurrentUser
 .\venv\Scripts\Activate
