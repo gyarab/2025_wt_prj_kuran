@@ -86,11 +86,15 @@ class DirectorDetailSchema(Schema):
 # --- Movie endpoints ---
 
 @api.get("/movie", response=List[MovieListSchema])
-def list_movies(request, q: str = None):
-    qs = Movie.objects.all().order_by('-release_year')
+def list_movies(request, q: str = None, limit: int = 50, offset: int = 0):
+    # The catalog has 700k+ movies — never return them all at once.
+    limit = max(1, min(limit, 200))
+    qs = Movie.objects.all()
     if q:
         qs = qs.filter(title__icontains=q)
-    return qs
+    # Most-voted first so recognizable films surface at the top.
+    qs = qs.order_by('-num_votes', '-release_year')
+    return qs[offset:offset + limit]
 
 @api.get("/movie/{movie_id}", response=MovieDetailSchema)
 def get_movie(request, movie_id: int):
