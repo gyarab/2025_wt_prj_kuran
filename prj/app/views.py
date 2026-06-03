@@ -52,7 +52,7 @@ def render_home(request):
 
 def render_movie_detail(request, movie_id):
     movie = get_object_or_404(
-        Movie.objects.prefetch_related('actors', 'genres'),
+        Movie.objects.prefetch_related('actors', 'genres', 'directors', 'writers'),
         imdb_id=movie_id,
     )
 
@@ -116,7 +116,7 @@ def render_actor_detail(request, actor_id):
 
 def render_director_detail(request, director_id):
     director = get_object_or_404(Director, id=director_id)
-    movies = Movie.objects.filter(director=director).order_by('-release_year')
+    movies = Movie.objects.filter(directors=director).order_by('-release_year')
     bio, photo_url = fetch_wikipedia_data(director.name)
     return render(request, 'person_detail.html', {
         'person': director,

@@ -7,6 +7,9 @@
 </div>
 
 <h1>{{ movie.title }} <span style="color: #888;">({{ movie.release_year }})</span></h1>
+{% if movie.original_title and movie.original_title != movie.title %}
+    <p style="color: #888; margin-top: -12px;"><em>{{ movie.original_title }}</em></p>
+{% endif %}
 
 {% if plot_summary %}
     <p style="font-size: 1.1em; line-height: 1.6; color: #ccc; max-width: 800px; margin-bottom: 30px; border-left: 4px solid #E50914; padding-left: 15px;">
@@ -27,20 +30,30 @@
 <table>
     <tr>
         <th style="width: 150px;">Rating:</th>
-        <td>{{ movie.rating|default:"N/A" }} / 10</td>
+        <td>{{ movie.rating|default:"N/A" }} / 10{% if movie.num_votes %} <span style="color: #888;">({{ movie.num_votes }} votes)</span>{% endif %}</td>
     </tr>
     <tr>
         <th>Duration:</th>
         <td>{{ movie.duration|default:"N/A" }} minutes</td>
     </tr>
     <tr>
-        <th>Director:</th>
+        <th>Directors:</th>
         <td>
-            {% if movie.director %}
-                <a href="{% url 'director_detail' movie.director.id %}">{{ movie.director.name }}</a>
-            {% else %}
+            {% for director in movie.directors.all %}
+                <a href="{% url 'director_detail' director.id %}">{{ director.name }}</a>{% if not forloop.last %}, {% endif %}
+            {% empty %}
                 Unknown
-            {% endif %}
+            {% endfor %}
+        </td>
+    </tr>
+    <tr>
+        <th>Writers:</th>
+        <td>
+            {% for writer in movie.writers.all %}
+                {{ writer.name }}{% if not forloop.last %}, {% endif %}
+            {% empty %}
+                None listed
+            {% endfor %}
         </td>
     </tr>
     <tr>

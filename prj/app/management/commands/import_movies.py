@@ -7,7 +7,7 @@ from concurrent.futures import ThreadPoolExecutor
 from django.core.management.base import BaseCommand
 from django.db import connection, transaction
 
-from app.models import Actor, Director, Genre, Movie
+from app.models import Actor, Director, Genre, Movie, Writer
 
 IMDB_BASE_URL = 'https://datasets.imdbws.com'
 IMDB_FILES = [
@@ -50,6 +50,13 @@ def _parse_int(value):
         return None
 
 
+def _nconsts(value):
+    """Split an IMDb comma-separated nconst list, dropping \\N / empties."""
+    if value == NULL:
+        return []
+    return [n for n in value.split(',') if n and n != NULL]
+
+
 def _id_map(model, field, values):
     """Build a {field_value: pk} map, chunking the IN query.
 
@@ -79,6 +86,9 @@ class Command(BaseCommand):
                             help='Directory containing (or to download) IMDb TSV(.gz) files')
         parser.add_argument('--download', action='store_true',
                             help='Download fresh IMDb data files before importing')
+        parser.add_argument('--update-existing', action='store_true',
+                            help='Re-process movies already in the DB to backfill new '
+                                 'fields/relations (preserves is_seen). Default: only add new.')
 
     # ------------------------------------------------------------------
     # Download (keeps files gzipped — we read .gz directly)
@@ -123,27 +133,33 @@ class Command(BaseCommand):
     def _read_ratings(path, tconsts):
         rows = _read_tsv(path)
         idx = next(rows)
-        i_t, i_r = idx['tconst'], idx['averageRating']
+        i_t, i_r, i_v = idx['tconst'], idx['averageRating'], idx['numVotes']
         result = {}
         for row in rows:
             if row[i_t] in tconsts:
                 v = row[i_r]
-                result[row[i_t]] = float(v) if v != NULL else None
+                rating = float(v) if v != NULL else None
+                result[row[i_t]] = (rating, _parse_int(row[i_v]))
         return result
 
     @staticmethod
     def _read_crew(path, tconsts):
         rows = _read_tsv(path)
         idx = next(rows)
-        i_t, i_d = idx['tconst'], idx['directors']
-        directors, needed = {}, set()
+        i_t, i_d, i_w = idx['tconst'], idx['directors'], idx['writers']
+        directors, writers = {}, {}
+        need_d, need_w = set(), set()
         for row in rows:
             if row[i_t] in tconsts:
-                first = row[i_d].split(',', 1)[0]
-                if first and first != NULL:
-                    directors[row[i_t]] = first
-                    needed.add(first)
-        return directors, needed
+                ds = _nconsts(row[i_d])
+                ws = _nconsts(row[i_w])
+                if ds:
+                    directors[row[i_t]] = ds
+                    need_d.update(ds)
+                if ws:
+                    writers[row[i_t]] = ws
+                    need_w.update(ws)
+        return directors, writers, need_d, need_w
 
     @staticmethod
     def _read_principals(path, tconsts):
@@ -179,12 +195,16 @@ class Command(BaseCommand):
 
         # 1. Basics — the master set of movies to import.
         self.stdout.write('1/5 Reading title.basics ...')
-        existing_ids = set(Movie.objects.values_list('imdb_id', flat=True))
+        # By default skip movies already imported; --update-existing re-processes
+        # them so new fields/relations get backfilled (is_seen is preserved).
+        existing_ids = (set() if options['update_existing']
+                        else set(Movie.objects.values_list('imdb_id', flat=True)))
         rows = _read_tsv(paths['title.basics'])
         idx = next(rows)
         i_t = idx['tconst']
         i_type = idx['titleType']
         i_title = idx['primaryTitle']
+        i_orig = idx['originalTitle']
         i_year = idx['startYear']
         i_runtime = idx['runtimeMinutes']
         i_genres = idx['genres']
@@ -193,13 +213,17 @@ class Command(BaseCommand):
             tconst = row[i_t]
             if row[i_type] != 'movie' or tconst in existing_ids:
                 continue
+            orig = row[i_orig]
             movies_data[tconst] = {
                 'title': row[i_title][:255],
+                'original_title': orig[:255] if orig != NULL else None,
                 'release_year': _parse_int(row[i_year]),
                 'duration': _parse_int(row[i_runtime]),
                 'genres': row[i_genres].split(',') if row[i_genres] != NULL else [],
                 'rating': None,
-                'director_nconst': None,
+                'num_votes': None,
+                'director_nconsts': [],
+                'writer_nconsts': [],
                 'actor_nconsts': [],
             }
             if limit and len(movies_data) >= limit:
@@ -219,22 +243,25 @@ class Command(BaseCommand):
             fut_crew = pool.submit(self._read_crew, paths['title.crew'], tconsts)
             fut_principals = pool.submit(self._read_principals, paths['title.principals'], tconsts)
             ratings = fut_ratings.result()
-            crew, needed_directors = fut_crew.result()
+            crew_dirs, crew_writers, needed_directors, needed_writers = fut_crew.result()
             actor_map, needed_actors = fut_principals.result()
 
-        for tconst, rating in ratings.items():
+        for tconst, (rating, votes) in ratings.items():
             movies_data[tconst]['rating'] = rating
-        for tconst, nconst in crew.items():
-            movies_data[tconst]['director_nconst'] = nconst
+            movies_data[tconst]['num_votes'] = votes
+        for tconst, ds in crew_dirs.items():
+            movies_data[tconst]['director_nconsts'] = ds
+        for tconst, ws in crew_writers.items():
+            movies_data[tconst]['writer_nconsts'] = ws
         for tconst, nconsts in actor_map.items():
             movies_data[tconst]['actor_nconsts'] = nconsts
 
         self.stdout.write(f'  {len(ratings):,} ratings, {len(needed_directors):,} directors, '
-                          f'{len(needed_actors):,} actors.')
+                          f'{len(needed_writers):,} writers, {len(needed_actors):,} actors.')
 
         # 5. Names — resolve only the people we actually reference.
         self.stdout.write('5/5 Reading name.basics ...')
-        all_needed = needed_directors | needed_actors
+        all_needed = needed_directors | needed_writers | needed_actors
         rows = _read_tsv(paths['name.basics'])
         idx = next(rows)
         i_n, i_name = idx['nconst'], idx['primaryName']
@@ -266,64 +293,62 @@ class Command(BaseCommand):
             )
             genre_objs = _id_map(Genre, 'name', all_genre_names)
 
-            # Directors
-            Director.objects.bulk_create(
-                [Director(imdb_id=nc, name=person_data[nc])
-                 for nc in needed_directors if nc in person_data],
-                ignore_conflicts=True,
-                batch_size=2000,
-            )
+            # People (directors / writers / actors share the IMDb nconst id).
+            for model, needed in ((Director, needed_directors),
+                                  (Writer, needed_writers),
+                                  (Actor, needed_actors)):
+                model.objects.bulk_create(
+                    [model(imdb_id=nc, name=person_data[nc])
+                     for nc in needed if nc in person_data],
+                    ignore_conflicts=True,
+                    batch_size=2000,
+                )
             director_objs = _id_map(Director, 'imdb_id', needed_directors)
-
-            # Actors
-            Actor.objects.bulk_create(
-                [Actor(imdb_id=nc, name=person_data[nc])
-                 for nc in needed_actors if nc in person_data],
-                ignore_conflicts=True,
-                batch_size=2000,
-            )
+            writer_objs = _id_map(Writer, 'imdb_id', needed_writers)
             actor_objs = _id_map(Actor, 'imdb_id', needed_actors)
 
-            # Movies
+            # Movies (M2M relations are written separately below).
             Movie.objects.bulk_create(
                 [Movie(
                     imdb_id=tconst,
                     title=data['title'],
+                    original_title=data['original_title'],
                     release_year=data['release_year'],
                     rating=data['rating'],
+                    num_votes=data['num_votes'],
                     duration=data['duration'],
-                    director_id=director_objs.get(data['director_nconst']),
                 ) for tconst, data in movies_data.items()],
                 update_conflicts=True,
-                update_fields=['title', 'release_year', 'rating', 'duration', 'director'],
+                update_fields=['title', 'original_title', 'release_year',
+                               'rating', 'num_votes', 'duration'],
                 unique_fields=['imdb_id'],
                 batch_size=1000,
             )
             movie_objs = _id_map(Movie, 'imdb_id', tconsts)
 
-            # M2M: genres
-            MovieGenre = Movie.genres.through
-            MovieGenre.objects.bulk_create(
-                [MovieGenre(movie_id=movie_objs[tc], genre_id=genre_objs[g])
-                 for tc, data in movies_data.items()
-                 for g in data['genres']
-                 if tc in movie_objs and g in genre_objs],
-                ignore_conflicts=True,
-                batch_size=2000,
-            )
-
-            # M2M: actors
-            MovieActor = Movie.actors.through
-            MovieActor.objects.bulk_create(
-                [MovieActor(movie_id=movie_objs[tc], actor_id=actor_objs[n])
-                 for tc, data in movies_data.items()
-                 for n in data['actor_nconsts']
-                 if tc in movie_objs and n in actor_objs],
-                ignore_conflicts=True,
-                batch_size=2000,
-            )
+            # M2M links
+            self._link_m2m(Movie.genres.through, 'genre_id', movie_objs, genre_objs,
+                           movies_data, 'genres')
+            self._link_m2m(Movie.directors.through, 'director_id', movie_objs, director_objs,
+                           movies_data, 'director_nconsts')
+            self._link_m2m(Movie.writers.through, 'writer_id', movie_objs, writer_objs,
+                           movies_data, 'writer_nconsts')
+            self._link_m2m(Movie.actors.through, 'actor_id', movie_objs, actor_objs,
+                           movies_data, 'actor_nconsts')
 
         elapsed = time.perf_counter() - started
         self.stdout.write(self.style.SUCCESS(
             f'Done. {len(movies_data):,} movies imported in {elapsed:.1f}s.'
         ))
+
+    @staticmethod
+    def _link_m2m(through, col, movie_objs, related_objs, movies_data, key):
+        """Bulk-create rows of a Movie M2M through table from collected keys."""
+        through.objects.bulk_create(
+            [through(movie_id=movie_objs[tc], **{col: related_objs[k]})
+             for tc, data in movies_data.items()
+             for k in data[key]
+             if tc in movie_objs and k in related_objs],
+            ignore_conflicts=True,
+            batch_size=2000,
+        )

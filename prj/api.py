@@ -1,7 +1,7 @@
 from ninja import NinjaAPI, Schema
 from typing import List, Optional
 from django.shortcuts import get_object_or_404
-from app.models import Movie, Actor, Director, Genre
+from app.models import Movie, Actor, Director, Genre, Writer
 
 api = NinjaAPI(title="Debridflix API", version="1.0.0")
 
@@ -15,6 +15,10 @@ class DirectorSchema(Schema):
     id: int
     name: str
 
+class WriterSchema(Schema):
+    id: int
+    name: str
+
 class ActorSchema(Schema):
     id: int
     name: str
@@ -22,39 +26,48 @@ class ActorSchema(Schema):
 class MovieListSchema(Schema):
     id: int
     title: str
+    original_title: Optional[str] = None
     imdb_id: str
     release_year: Optional[int] = None
     rating: Optional[float] = None
+    num_votes: Optional[int] = None
     duration: Optional[int] = None
     is_seen: bool
 
 class MovieDetailSchema(Schema):
     id: int
     title: str
+    original_title: Optional[str] = None
     imdb_id: str
     release_year: Optional[int] = None
     rating: Optional[float] = None
+    num_votes: Optional[int] = None
     duration: Optional[int] = None
     is_seen: bool
     plot_summary: Optional[str] = None
     poster_url: Optional[str] = None
-    director: Optional[DirectorSchema] = None
+    directors: List[DirectorSchema] = []
+    writers: List[WriterSchema] = []
     genres: List[GenreSchema] = []
     actors: List[ActorSchema] = []
 
 class MovieCreateSchema(Schema):
     title: str
+    original_title: Optional[str] = None
     imdb_id: str
     release_year: Optional[int] = None
     rating: Optional[float] = None
+    num_votes: Optional[int] = None
     duration: Optional[int] = None
     plot_summary: Optional[str] = None
     poster_url: Optional[str] = None
 
 class MovieUpdateSchema(Schema):
     title: Optional[str] = None
+    original_title: Optional[str] = None
     release_year: Optional[int] = None
     rating: Optional[float] = None
+    num_votes: Optional[int] = None
     duration: Optional[int] = None
     plot_summary: Optional[str] = None
     poster_url: Optional[str] = None
@@ -82,14 +95,14 @@ def list_movies(request, q: str = None):
 @api.get("/movie/{movie_id}", response=MovieDetailSchema)
 def get_movie(request, movie_id: int):
     return get_object_or_404(
-        Movie.objects.prefetch_related('actors', 'genres').select_related('director'),
+        Movie.objects.prefetch_related('actors', 'genres', 'directors', 'writers'),
         id=movie_id
     )
 
 @api.post("/movie", response=MovieDetailSchema)
 def create_movie(request, payload: MovieCreateSchema):
     movie = Movie.objects.create(**payload.dict())
-    return Movie.objects.prefetch_related('actors', 'genres').select_related('director').get(id=movie.id)
+    return Movie.objects.prefetch_related('actors', 'genres', 'directors', 'writers').get(id=movie.id)
 
 @api.put("/movie/{movie_id}", response=MovieDetailSchema)
 def update_movie(request, movie_id: int, payload: MovieUpdateSchema):
@@ -97,7 +110,7 @@ def update_movie(request, movie_id: int, payload: MovieUpdateSchema):
     for attr, value in payload.dict(exclude_unset=True).items():
         setattr(movie, attr, value)
     movie.save()
-    return Movie.objects.prefetch_related('actors', 'genres').select_related('director').get(id=movie.id)
+    return Movie.objects.prefetch_related('actors', 'genres', 'directors', 'writers').get(id=movie.id)
 
 @api.delete("/movie/{movie_id}")
 def delete_movie(request, movie_id: int):
