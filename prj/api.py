@@ -1,4 +1,5 @@
 import logging
+import re
 import urllib.parse
 import requests
 from django.contrib.auth import authenticate
@@ -552,8 +553,14 @@ def list_subtitles(request, movie_id: int, language: str = 'en'):
     except Exception as e:
         return api.create_response(request, {'detail': f'OpenSubtitles error: {e}'}, status=502)
 
+    # Prefer SRT: it carries absolute timestamps, so it always stays in sync.
+    # Frame-based formats (MicroDVD .sub) are still converted by the proxy, but
+    # listing SRT first makes the auto-selected default the reliable one.
+    items = list(data or [])
+    items.sort(key=lambda it: 0 if str(it.get('SubFormat', 'srt')).lower() == 'srt' else 1)
+
     results = []
-    for item in (data or [])[:10]:
+    for item in items[:10]:
         results.append({
             'id':       item.get('IDSubtitleFile'),
             'name':     item.get('SubFileName', ''),
@@ -565,12 +572,143 @@ def list_subtitles(request, movie_id: int, language: str = 'en'):
     return results
 
 
-# GET /api/movie/{id}/subtitle-proxy?url=...  — proxy + SRT→VTT conversion
+def _decode_subtitle(raw: bytes) -> str:
+    """Decode subtitle bytes to text.
+
+    Czech/Slovak subtitles on OpenSubtitles are almost always Windows-1250
+    (or ISO-8859-2), not UTF-8, so a plain utf-8 decode mangles diacritics
+    (ě š č ř ž ý …). Prefer real UTF-8 when valid, then sniff the encoding,
+    then fall back to the common single-byte CZ/SK code pages.
+    """
+    # Valid UTF-8 (with optional BOM) — covers English and modern files exactly.
+    try:
+        return raw.decode('utf-8-sig')
+    except UnicodeDecodeError:
+        pass
+    # Detect the encoding (charset-normalizer ships as a requests dependency).
+    try:
+        from charset_normalizer import from_bytes
+        best = from_bytes(raw).best()
+        if best:
+            return str(best)
+    except Exception:
+        pass
+    # Deterministic fallback for the languages this app targets.
+    for enc in ('cp1250', 'iso-8859-2'):
+        try:
+            return raw.decode(enc)
+        except UnicodeDecodeError:
+            continue
+    return raw.decode('utf-8', errors='replace')
+
+
+def _vtt_timestamp(seconds: float) -> str:
+    if seconds < 0:
+        seconds = 0.0
+    total_ms = int(round(seconds * 1000))
+    h, rem = divmod(total_ms, 3_600_000)
+    m, rem = divmod(rem, 60_000)
+    s, ms = divmod(rem, 1000)
+    return f'{h:02d}:{m:02d}:{s:02d}.{ms:03d}'
+
+
+def _microdvd_to_vtt(text: str, default_fps: float = 23.976) -> str:
+    """{start_frame}{end_frame}text|text  →  WebVTT cues (frame-based)."""
+    line_re = re.compile(r'^\s*\{(\d+)\}\{(\d+)\}(.*)$')
+    fps = default_fps
+    rows = []
+    for raw_line in text.split('\n'):
+        m = line_re.match(raw_line)
+        if not m:
+            continue
+        start_f, end_f, body = int(m.group(1)), int(m.group(2)), m.group(3)
+        # A line like {1}{1}23.976 declares the frame rate.
+        if start_f == end_f:
+            try:
+                fps = float(body.strip().replace(',', '.'))
+                continue
+            except ValueError:
+                pass
+        rows.append((start_f, end_f, body))
+    if fps <= 0:
+        fps = default_fps
+    cues = []
+    for start_f, end_f, body in rows:
+        body = re.sub(r'\{[^}]*\}', '', body)        # strip {y:i}-style control codes
+        body = body.replace('|', '\n').strip()
+        if not body:
+            continue
+        cues.append(f'{_vtt_timestamp(start_f / fps)} --> {_vtt_timestamp(end_f / fps)}\n{body}')
+    return '\n\n'.join(cues)
+
+
+def _mpl2_to_vtt(text: str) -> str:
+    """[start][end]text  →  WebVTT cues (deciseconds)."""
+    line_re = re.compile(r'^\s*\[(\d+)\]\[(\d+)\](.*)$')
+    cues = []
+    for raw_line in text.split('\n'):
+        m = line_re.match(raw_line)
+        if not m:
+            continue
+        start, end = int(m.group(1)) / 10, int(m.group(2)) / 10
+        body = m.group(3).replace('|', '\n').strip()
+        if not body:
+            continue
+        cues.append(f'{_vtt_timestamp(start)} --> {_vtt_timestamp(end)}\n{body}')
+    return '\n\n'.join(cues)
+
+
+def _subviewer_to_vtt(text: str) -> str:
+    """HH:MM:SS.cc,HH:MM:SS.cc + text  →  WebVTT cues."""
+    ts = re.compile(r'(\d{2}):(\d{2}):(\d{2})\.(\d{2})\s*,\s*(\d{2}):(\d{2}):(\d{2})\.(\d{2})')
+    cues = []
+    for block in re.split(r'\n\s*\n', text):
+        lines = [l for l in block.split('\n') if l.strip()]
+        if not lines:
+            continue
+        m = ts.search(lines[0])
+        if not m:
+            continue
+        g = list(map(int, m.groups()))
+        start = g[0] * 3600 + g[1] * 60 + g[2] + g[3] / 100
+        end   = g[4] * 3600 + g[5] * 60 + g[6] + g[7] / 100
+        body = '\n'.join(lines[1:]).replace('[br]', '\n').strip()
+        if not body:
+            continue
+        cues.append(f'{_vtt_timestamp(start)} --> {_vtt_timestamp(end)}\n{body}')
+    return '\n\n'.join(cues)
+
+
+def _subtitle_to_vtt(text: str) -> str:
+    """Convert SRT / MicroDVD / MPL2 / SubViewer subtitle text to WebVTT.
+
+    OpenSubtitles serves several formats under the .sub extension (mostly
+    frame-based MicroDVD for CZ/SK). The HTML5 <track> element only accepts
+    WebVTT, so normalise everything here. Note: frame-based formats need the
+    video frame rate; without an in-file FPS declaration we assume 23.976,
+    so MicroDVD subs may need sync adjustment.
+    """
+    text = text.replace('\r\n', '\n').replace('\r', '\n').lstrip('﻿')
+    head = text.lstrip()
+    if re.match(r'\{\d+\}\{\d+\}', head):
+        body = _microdvd_to_vtt(text)
+    elif re.match(r'\[\d+\]\[\d+\]', head):
+        body = _mpl2_to_vtt(text)
+    elif re.search(r'\d{2}:\d{2}:\d{2}\.\d{2}\s*,\s*\d{2}:\d{2}:\d{2}\.\d{2}', text):
+        body = _subviewer_to_vtt(text)
+    else:
+        # SRT (or already VTT-ish): normalise comma decimals, drop any WEBVTT header.
+        body = re.sub(r'(\d{2}:\d{2}:\d{2}),(\d{3})', r'\1.\2', text)
+        body = re.sub(r'^\s*WEBVTT[^\n]*\n+', '', body).strip()
+    return 'WEBVTT\n\n' + body
+
+
+# GET /api/movie/{id}/subtitle-proxy?url=...  — proxy + convert any text format → VTT
 @api.get('/movie/{movie_id}/subtitle-proxy', auth=None)
 def subtitle_proxy(request, movie_id: int, url: str):
-    """Download subtitle, convert SRT to WebVTT, return as text/vtt."""
+    """Download subtitle, convert SRT/MicroDVD/MPL2/SubViewer to WebVTT."""
     from django.http import HttpResponse
-    import gzip as gz, re
+    import gzip as gz
 
     if not url.startswith('https://dl.opensubtitles.org'):
         return api.create_response(request, {'detail': 'Invalid URL.'}, status=400)
@@ -580,14 +718,11 @@ def subtitle_proxy(request, movie_id: int, url: str):
         # OpenSubtitles sometimes returns gzipped content
         if content[:2] == b'\x1f\x8b':
             content = gz.decompress(content)
-        srt = content.decode('utf-8', errors='replace')
+        raw_text = _decode_subtitle(content)
     except Exception as e:
         return api.create_response(request, {'detail': str(e)}, status=502)
 
-    # Convert SRT → WebVTT
-    vtt = 'WEBVTT\n\n'
-    vtt += re.sub(r'(\d{2}:\d{2}:\d{2}),(\d{3})', r'\1.\2', srt)
-
+    vtt = _subtitle_to_vtt(raw_text)
     return HttpResponse(vtt, content_type='text/vtt; charset=utf-8')
 
 
