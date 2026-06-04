@@ -40,14 +40,10 @@ def fetch_wikipedia_data(person_name):
 
 
 def render_home(request):
-    movie_list = Movie.objects.all()
-    search_query = request.GET.get('q', '')
-    if search_query:
-        movie_list = movie_list.filter(title__icontains=search_query)
-    movie_list = movie_list.order_by('-release_year', 'title')
+    movie_list = Movie.objects.all().order_by('-release_year', 'title')
     paginator = Paginator(movie_list, 20)
     page_obj = paginator.get_page(request.GET.get('page'))
-    return render(request, 'home.html', {'page_obj': page_obj, 'query': search_query})
+    return render(request, 'home.html', {'page_obj': page_obj})
 
 
 def render_movie_detail(request, movie_id):
