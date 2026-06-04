@@ -18,6 +18,7 @@ const streamName    = ref('')
 const streamQuality = ref('')
 const subtitleUrl   = ref('')
 const subtitleLang  = ref('')
+const copied        = ref(false)
 
 const SUBTITLE_LABELS = { cs: 'Czech', sk: 'Slovak', en: 'English' }
 
@@ -81,6 +82,49 @@ function closePlayer() {
     streamUrl.value    = ''
     subtitleUrl.value  = ''
     subtitleLang.value = ''
+    copied.value       = false
+}
+
+// Build an .m3u playlist pointing at the Real-Debrid direct URL. The file itself
+// is a tiny text pointer — VLC (or any default player) streams the video over
+// HTTP from RD without downloading it. The selected subtitle, if any, rides along
+// as a slave input so you can fix sync in VLC (G / H keys).
+function buildPlaylist() {
+    const title = (streamName.value || movie.value?.title || 'stream').trim()
+    const lines = ['#EXTM3U', `#EXTINF:-1,${title}`]
+    if (subtitleUrl.value) {
+        const absSub = new URL(subtitleUrl.value, window.location.origin).href
+        lines.push(`#EXTVLCOPT:input-slave=${absSub}`)
+    }
+    lines.push(streamUrl.value)
+    return lines.join('\n') + '\n'
+}
+
+function openInExternalPlayer() {
+    if (!streamUrl.value) return
+    const safe = (streamName.value || movie.value?.title || 'stream')
+        .replace(/[^\w.-]+/g, '_').slice(0, 80) || 'stream'
+    const blob = new Blob([buildPlaylist()], { type: 'audio/x-mpegurl' })
+    const href = URL.createObjectURL(blob)
+    const a = document.createElement('a')
+    a.href = href
+    a.download = `${safe}.m3u`
+    document.body.appendChild(a)
+    a.click()
+    a.remove()
+    setTimeout(() => URL.revokeObjectURL(href), 15000)
+}
+
+async function copyStreamLink() {
+    if (!streamUrl.value) return
+    try {
+        await navigator.clipboard.writeText(streamUrl.value)
+        copied.value = true
+        setTimeout(() => { copied.value = false }, 2000)
+    } catch {
+        // Clipboard API blocked (e.g. non-secure context) — fall back to a prompt.
+        window.prompt('Stream URL — paste into VLC ▸ Open Network Stream (Ctrl+N):', streamUrl.value)
+    }
 }
 
 watch(() => route.params.id, load, { immediate: true })
@@ -118,9 +162,13 @@ watch(() => route.params.id, load, { immediate: true })
                         :label="SUBTITLE_LABELS[subtitleLang] || 'Subtitles'" default />
                 </video>
                 <div class="player-fallback">
-                    <a :href="streamUrl" target="_blank" rel="noopener" class="player-open-link">
-                        ↗ Open in new tab / download
-                    </a>
+                    <button class="ext-action ext-vlc" @click="openInExternalPlayer">
+                        ▶ Open in VLC / player
+                    </button>
+                    <button class="ext-action" @click="copyStreamLink">
+                        {{ copied ? '✓ Link copied' : '⧉ Copy stream link' }}
+                    </button>
+                    <a :href="streamUrl" target="_blank" rel="noopener" class="ext-action">↗ New tab</a>
                 </div>
             </div>
         </div>
@@ -430,12 +478,17 @@ watch(() => route.params.id, load, { immediate: true })
 
 .player-fallback {
     padding: 12px 20px; background: #111; border-top: 1px solid #1e1e1e;
-    text-align: center;
+    display: flex; align-items: center; justify-content: center;
+    gap: 10px; flex-wrap: wrap;
 }
 
-.player-open-link {
-    color: #666; font-size: 0.82rem;
-    transition: color 0.15s;
+.ext-action {
+    background: #1a1a1a; border: 1px solid #2a2a2a; color: #aaa;
+    font-size: 0.82rem; padding: 7px 14px; border-radius: 6px;
+    transition: border-color 0.15s, color 0.15s, background 0.15s;
 }
-.player-open-link:hover { color: #ccc; }
+.ext-action:hover { border-color: #555; color: #fff; }
+
+.ext-vlc { border-color: #e8590c; color: #ff7518; }
+.ext-vlc:hover { background: #e8590c; color: #fff; border-color: #e8590c; }
 </style>
