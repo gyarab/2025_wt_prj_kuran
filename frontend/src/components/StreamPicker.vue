@@ -106,7 +106,7 @@ async function play() {
       }
     }
 
-    emit('play', { ...data, quality: stream.quality, subtitleUrl: subUrl })
+    emit('play', { ...data, quality: stream.quality, subtitleUrl: subUrl, subtitleLang: subUrl ? subtitleLang.value : '' })
   } catch {
     playError.value = 'Network error.'
   } finally {
@@ -243,7 +243,10 @@ loadStreams()
 .chip.active { border-color: #e50914; color: #e5e5e5; }
 
 /* Stream list */
-.stream-list-wrap { min-height: 80px; }
+/* Scroll the list inside its own box. Without this it's a flex item that gets
+   squeezed below its content height and the rows spill over the subtitle
+   controls and the Play button beneath it. */
+.stream-list-wrap { min-height: 80px; max-height: 45vh; overflow-y: auto; }
 .hint { color: #555; font-size: 0.85rem; margin: 4px 0; }
 .hint.error { color: #e50914; }
 

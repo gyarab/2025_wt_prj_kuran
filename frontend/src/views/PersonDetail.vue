@@ -9,19 +9,24 @@ const error = ref('')
 
 const type = computed(() => route.params.type)
 
+let loadSeq = 0   // guards against a slow response for a previous person winning
+
 async function load() {
+    const seq = ++loadSeq
     loading.value = true
     error.value = ''
     person.value = null
     try {
         const res = await fetch(`/api/${type.value}/${route.params.id}`)
         if (!res.ok) throw new Error(`HTTP ${res.status}`)
-        person.value = await res.json()
+        const data = await res.json()
+        if (seq !== loadSeq) return   // navigated elsewhere; discard
+        person.value = data
         fetchMissingPosters(person.value.movies)
     } catch (e) {
-        error.value = e.message
+        if (seq === loadSeq) error.value = e.message
     } finally {
-        loading.value = false
+        if (seq === loadSeq) loading.value = false
     }
 }
 

@@ -41,6 +41,13 @@ async function submit() {
                 body: JSON.stringify({ username: username.value.trim(), password: password.value }),
             })
             const loginData = await loginRes.json()
+            if (!loginRes.ok || !loginData.token) {
+                // Account was created, but signing in failed — don't persist a
+                // broken token; send the user to the login form instead.
+                mode.value = 'login'
+                error.value = loginData.detail || 'Account created. Please log in.'
+                return
+            }
             setAuth(loginData.token, loginData.user)
         }
         router.push('/')

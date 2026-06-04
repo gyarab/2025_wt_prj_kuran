@@ -3,8 +3,26 @@ import { ref, computed } from 'vue'
 const TOKEN_KEY = 'debridflix_token'
 const USER_KEY  = 'debridflix_user'
 
-const token = ref(localStorage.getItem(TOKEN_KEY) || null)
-const user  = ref(JSON.parse(localStorage.getItem(USER_KEY) || 'null'))
+function loadStoredToken() {
+    const stored = localStorage.getItem(TOKEN_KEY)
+    // Guard against a literal "undefined"/"null" string sneaking in — those are
+    // truthy and would otherwise fake a logged-in state with a broken token.
+    return stored && stored !== 'undefined' && stored !== 'null' ? stored : null
+}
+
+function loadStoredUser() {
+    try {
+        return JSON.parse(localStorage.getItem(USER_KEY) || 'null')
+    } catch {
+        // Corrupted value (e.g. the literal string "undefined") would crash the
+        // whole app on startup — reset it instead.
+        localStorage.removeItem(USER_KEY)
+        return null
+    }
+}
+
+const token = ref(loadStoredToken())
+const user  = ref(loadStoredUser())
 
 export function useAuth() {
     const isLoggedIn = computed(() => !!token.value)

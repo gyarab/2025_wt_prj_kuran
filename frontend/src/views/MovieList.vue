@@ -19,6 +19,7 @@ const error = ref('')
 const offset = ref(0)
 const hasMore = ref(true)
 const LIMIT = 20
+let loadSeq = 0   // guards against out-of-order responses overwriting newer ones
 
 const SORT_OPTIONS = [
     { value: 'votes',         label: 'Most popular' },
@@ -41,6 +42,7 @@ const VOTE_FILTERS = [
 ]
 
 async function load(reset = true) {
+    const seq = ++loadSeq
     if (reset) {
         offset.value = 0
         movies.value = []
@@ -55,14 +57,15 @@ async function load(reset = true) {
         const res = await fetch(`/api/movie?${params}`)
         if (!res.ok) throw new Error(`HTTP ${res.status}`)
         const batch = await res.json()
+        if (seq !== loadSeq) return   // a newer load started; discard this result
         movies.value = reset ? batch : [...movies.value, ...batch]
         offset.value += batch.length
         hasMore.value = batch.length === LIMIT
         fetchMissingPosters(batch)
     } catch (e) {
-        error.value = e.message
+        if (seq === loadSeq) error.value = e.message
     } finally {
-        loading.value = false
+        if (seq === loadSeq) loading.value = false
     }
 }
 

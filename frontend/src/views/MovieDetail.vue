@@ -17,19 +17,27 @@ const streamUrl     = ref('')
 const streamName    = ref('')
 const streamQuality = ref('')
 const subtitleUrl   = ref('')
+const subtitleLang  = ref('')
+
+const SUBTITLE_LABELS = { cs: 'Czech', sk: 'Slovak', en: 'English' }
+
+let loadSeq = 0   // guards against a slow response for a previous movie winning
 
 async function load(id) {
+    const seq = ++loadSeq
     loading.value = true
     error.value = ''
     movie.value = null
     try {
         const res = await fetch(`/api/movie/${id}`)
         if (!res.ok) throw new Error(`HTTP ${res.status}`)
-        movie.value = await res.json()
+        const data = await res.json()
+        if (seq !== loadSeq) return   // navigated to another movie; discard
+        movie.value = data
     } catch (e) {
-        error.value = e.message
+        if (seq === loadSeq) error.value = e.message
     } finally {
-        loading.value = false
+        if (seq === loadSeq) loading.value = false
     }
 }
 
@@ -60,17 +68,19 @@ function play() {
     showPicker.value = true
 }
 
-function onStreamReady({ url, filename, quality, subtitleUrl: sub }) {
+function onStreamReady({ url, filename, quality, subtitleUrl: sub, subtitleLang: subLang }) {
     showPicker.value    = false
     streamUrl.value     = url
     streamName.value    = filename
     streamQuality.value = quality
     subtitleUrl.value   = sub || ''
+    subtitleLang.value  = subLang || ''
 }
 
 function closePlayer() {
-    streamUrl.value  = ''
-    subtitleUrl.value = ''
+    streamUrl.value    = ''
+    subtitleUrl.value  = ''
+    subtitleLang.value = ''
 }
 
 watch(() => route.params.id, load, { immediate: true })
@@ -103,7 +113,9 @@ watch(() => route.params.id, load, { immediate: true })
                     controls
                     autoplay
                 >
-                    <track v-if="subtitleUrl" :src="subtitleUrl" kind="subtitles" default />
+                    <track v-if="subtitleUrl" :src="subtitleUrl" kind="subtitles"
+                        :srclang="subtitleLang || 'und'"
+                        :label="SUBTITLE_LABELS[subtitleLang] || 'Subtitles'" default />
                 </video>
                 <div class="player-fallback">
                     <a :href="streamUrl" target="_blank" rel="noopener" class="player-open-link">
