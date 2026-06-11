@@ -1,5 +1,5 @@
 from django.contrib import admin
-from .models import Movie, Actor, Director, Genre, Writer
+from .models import Movie, Actor, Director, Genre, Writer, Episode
 
 @admin.register(Actor)
 class ActorAdmin(admin.ModelAdmin):
@@ -23,9 +23,9 @@ class GenreAdmin(admin.ModelAdmin):
 
 @admin.register(Movie)
 class MovieAdmin(admin.ModelAdmin):
-    list_display = ('title', 'release_year', 'rating', 'num_votes',
+    list_display = ('title', 'kind', 'release_year', 'rating', 'num_votes',
                     'director_names', 'is_seen')
-    list_filter = ('is_seen', 'genres')
+    list_filter = ('kind', 'is_seen', 'genres')
     search_fields = ('title', 'imdb_id')
     # Without autocomplete the change page would render <select>s containing
     # every actor/director/writer (1M+ <option>s). Autocomplete loads on demand.
@@ -37,3 +37,14 @@ class MovieAdmin(admin.ModelAdmin):
     @admin.display(description='Directors')
     def director_names(self, obj):
         return ', '.join(d.name for d in obj.directors.all()) or '—'
+
+
+@admin.register(Episode)
+class EpisodeAdmin(admin.ModelAdmin):
+    list_display = ('title', 'series', 'season_number', 'episode_number',
+                    'rating', 'is_seen')
+    list_filter = ('is_seen',)
+    search_fields = ('title', 'imdb_id', 'series__title')
+    # The parent series picker would otherwise list every series as an <option>.
+    autocomplete_fields = ('series',)
+    list_select_related = ('series',)

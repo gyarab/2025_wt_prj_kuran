@@ -2,7 +2,9 @@
 import { ref, computed, watch } from 'vue'
 import { useAuth } from '../auth.js'
 
-const props  = defineProps({ movieId: Number, movieTitle: String })
+// `base` is the API prefix for this title, e.g. '/api/movie/12' or
+// '/api/episode/34'; all stream/subtitle calls hang off it.
+const props  = defineProps({ base: String, title: String })
 const emit   = defineEmits(['play', 'close'])
 const { authFetch } = useAuth()
 
@@ -55,7 +57,7 @@ async function loadStreams() {
   loadingList.value = true
   listError.value   = ''
   try {
-    const res  = await authFetch(`/api/movie/${props.movieId}/streams`)
+    const res  = await authFetch(`${props.base}/streams`)
     const data = await res.json()
     if (!res.ok) { listError.value = data.detail || 'Failed to load streams.'; return }
     streams.value = data
@@ -71,7 +73,7 @@ watch(subtitleLang, async (lang) => {
   if (lang === 'none') { subtitles.value = []; selectedSubId.value = null; return }
   loadingSubs.value = true
   try {
-    const res  = await fetch(`/api/movie/${props.movieId}/subtitles?language=${lang}`)
+    const res  = await fetch(`${props.base}/subtitles?language=${lang}`)
     const data = await res.json()
     subtitles.value    = Array.isArray(data) ? data : []
     selectedSubId.value = subtitles.value[0]?.id ?? null
@@ -90,7 +92,7 @@ async function play() {
   playError.value = ''
 
   try {
-    const res  = await authFetch(`/api/movie/${props.movieId}/stream`, {
+    const res  = await authFetch(`${props.base}/stream`, {
       method: 'POST',
       body:   JSON.stringify({ info_hash: stream.info_hash, file_ids: stream.file_ids }),
     })
@@ -102,7 +104,7 @@ async function play() {
     if (selectedSubId.value) {
       const sub = subtitles.value.find(s => s.id === selectedSubId.value)
       if (sub?.url) {
-        subUrl = `/api/movie/${props.movieId}/subtitle-proxy?url=${encodeURIComponent(sub.url)}`
+        subUrl = `${props.base}/subtitle-proxy?url=${encodeURIComponent(sub.url)}`
       }
     }
 
@@ -121,7 +123,7 @@ loadStreams()
   <div class="picker-overlay" @click.self="emit('close')">
     <div class="picker">
       <div class="picker-header">
-        <span class="picker-title">Choose stream</span>
+        <span class="picker-title">{{ title || 'Choose stream' }}</span>
         <button class="picker-close" @click="emit('close')">✕</button>
       </div>
 

@@ -1,3 +1,4 @@
+import gc
 import gzip
 import os
 import time
@@ -7,7 +8,7 @@ from concurrent.futures import ThreadPoolExecutor
 from django.core.management.base import BaseCommand
 from django.db import connection, transaction
 
-from app.models import Actor, Director, Genre, Movie, Writer
+from app.models import Actor, Director, Episode, Genre, Movie, Writer
 
 IMDB_BASE_URL = 'https://datasets.imdbws.com'
 IMDB_FILES = [
@@ -15,9 +16,17 @@ IMDB_FILES = [
     'title.ratings.tsv.gz',
     'title.crew.tsv.gz',
     'title.principals.tsv.gz',
+    'title.episode.tsv.gz',
     'name.basics.tsv.gz',
 ]
 NULL = r'\N'
+
+# IMDb titleTypes imported as the top-level Movie table, mapped to Movie.kind.
+TITLE_KINDS = {
+    'movie': Movie.MOVIE,
+    'tvSeries': Movie.SERIES,
+    'tvMiniSeries': Movie.SERIES,
+}
 
 
 def _open_text(path):
@@ -89,6 +98,9 @@ class Command(BaseCommand):
         parser.add_argument('--update-existing', action='store_true',
                             help='Re-process movies already in the DB to backfill new '
                                  'fields/relations (preserves is_seen). Default: only add new.')
+        parser.add_argument('--no-episodes', action='store_true',
+                            help='Import series as show-level records only, skipping the '
+                                 'per-episode pass (title.episode). Default: import episodes.')
 
     # ------------------------------------------------------------------
     # Download (keeps files gzipped — we read .gz directly)
@@ -173,6 +185,50 @@ class Command(BaseCommand):
                 needed.add(row[i_n])
         return actors, needed
 
+    @staticmethod
+    def _read_episodes(path, series_tconsts):
+        """Map each episode to its parent series + season/episode numbers.
+
+        Returns {episode_tconst: (parent_tconst, season, episode)} for every
+        episode whose parentTconst is one of the series we're importing.
+        """
+        rows = _read_tsv(path)
+        idx = next(rows)
+        i_t, i_p = idx['tconst'], idx['parentTconst']
+        i_s, i_e = idx['seasonNumber'], idx['episodeNumber']
+        result = {}
+        for row in rows:
+            if row[i_p] in series_tconsts:
+                result[row[i_t]] = (row[i_p], _parse_int(row[i_s]), _parse_int(row[i_e]))
+        return result
+
+    @staticmethod
+    def _read_episode_basics(path, ep_tconsts):
+        """Second pass over title.basics: pull title/year/runtime for episodes.
+
+        Episode metadata lives in title.basics (titleType=tvEpisode), but we
+        only learn which episodes we need after reading title.episode, so this
+        re-scans the file for just those tconsts.
+        """
+        rows = _read_tsv(path)
+        idx = next(rows)
+        i_t = idx['tconst']
+        i_title = idx['primaryTitle']
+        i_year = idx['startYear']
+        i_runtime = idx['runtimeMinutes']
+        result = {}
+        for row in rows:
+            if row[i_t] in ep_tconsts:
+                title = row[i_title]
+                result[row[i_t]] = (
+                    title[:255] if title != NULL else '',
+                    _parse_int(row[i_year]),
+                    _parse_int(row[i_runtime]),
+                )
+                if len(result) == len(ep_tconsts):
+                    break
+        return result
+
     # ------------------------------------------------------------------
 
     def handle(self, *args, **options):
@@ -184,18 +240,19 @@ class Command(BaseCommand):
             self.stdout.write('--- Downloading IMDb data ---')
             self.download_files(data_dir)
 
-        paths = {
-            name: self._resolve_path(data_dir, name)
-            for name in ('title.basics', 'title.ratings', 'title.crew',
-                         'title.principals', 'name.basics')
-        }
+        import_episodes = not options['no_episodes']
+        path_names = ['title.basics', 'title.ratings', 'title.crew',
+                      'title.principals', 'name.basics']
+        if import_episodes:
+            path_names.append('title.episode')
+        paths = {name: self._resolve_path(data_dir, name) for name in path_names}
 
         cap = f'{limit:,}' if limit else 'ALL'
         self.stdout.write(self.style.SUCCESS(f'--- Single-pass import (limit: {cap}) ---'))
 
-        # 1. Basics — the master set of movies to import.
+        # 1. Basics — the master set of movies + series to import.
         self.stdout.write('1/5 Reading title.basics ...')
-        # By default skip movies already imported; --update-existing re-processes
+        # By default skip titles already imported; --update-existing re-processes
         # them so new fields/relations get backfilled (is_seen is preserved).
         existing_ids = (set() if options['update_existing']
                         else set(Movie.objects.values_list('imdb_id', flat=True)))
@@ -206,18 +263,22 @@ class Command(BaseCommand):
         i_title = idx['primaryTitle']
         i_orig = idx['originalTitle']
         i_year = idx['startYear']
+        i_end = idx['endYear']
         i_runtime = idx['runtimeMinutes']
         i_genres = idx['genres']
         movies_data = {}
         for row in rows:
             tconst = row[i_t]
-            if row[i_type] != 'movie' or tconst in existing_ids:
+            kind = TITLE_KINDS.get(row[i_type])
+            if kind is None or tconst in existing_ids:
                 continue
             orig = row[i_orig]
             movies_data[tconst] = {
+                'kind': kind,
                 'title': row[i_title][:255],
                 'original_title': orig[:255] if orig != NULL else None,
                 'release_year': _parse_int(row[i_year]),
+                'end_year': _parse_int(row[i_end]),
                 'duration': _parse_int(row[i_runtime]),
                 'genres': row[i_genres].split(',') if row[i_genres] != NULL else [],
                 'rating': None,
@@ -228,7 +289,11 @@ class Command(BaseCommand):
             }
             if limit and len(movies_data) >= limit:
                 break
-        self.stdout.write(f'  {len(movies_data):,} new movies collected.')
+
+        series_tconsts = frozenset(tc for tc, d in movies_data.items()
+                                   if d['kind'] == Movie.SERIES)
+        n_movies = len(movies_data) - len(series_tconsts)
+        self.stdout.write(f'  {n_movies:,} movies + {len(series_tconsts):,} series collected.')
 
         if not movies_data:
             self.stdout.write(self.style.SUCCESS('Nothing new to import.'))
@@ -236,10 +301,37 @@ class Command(BaseCommand):
 
         tconsts = frozenset(movies_data)
 
+        # 1b. Episodes — link episodes to the series we're importing, then pull
+        # their metadata in a second pass over title.basics.
+        episodes_data = {}
+        if import_episodes and series_tconsts:
+            self.stdout.write('1b. Reading title.episode + episode basics ...')
+            ep_links = self._read_episodes(paths['title.episode'], series_tconsts)
+            ep_basics = self._read_episode_basics(paths['title.basics'], set(ep_links))
+            for ep_tc, (parent, season, episode) in ep_links.items():
+                title, year, runtime = ep_basics.get(ep_tc, ('', None, None))
+                episodes_data[ep_tc] = {
+                    'parent': parent,
+                    'season': season,
+                    'episode': episode,
+                    'title': title,
+                    'release_year': year,
+                    'duration': runtime,
+                    'rating': None,
+                    'num_votes': None,
+                }
+            # Both maps are ~one entry per episode (millions of rows at full
+            # scale); drop them now so they don't stack with episodes_data.
+            del ep_links, ep_basics
+            gc.collect()
+            self.stdout.write(f'  {len(episodes_data):,} episodes collected.')
+
         # 2-4. Ratings / crew / principals — one pass each, in parallel.
+        # Ratings cover episodes too; crew/principals stay at movie/series level.
         self.stdout.write('2-4/5 Reading ratings, crew, principals ...')
+        rating_tconsts = tconsts | frozenset(episodes_data)
         with ThreadPoolExecutor(max_workers=3) as pool:
-            fut_ratings = pool.submit(self._read_ratings, paths['title.ratings'], tconsts)
+            fut_ratings = pool.submit(self._read_ratings, paths['title.ratings'], rating_tconsts)
             fut_crew = pool.submit(self._read_crew, paths['title.crew'], tconsts)
             fut_principals = pool.submit(self._read_principals, paths['title.principals'], tconsts)
             ratings = fut_ratings.result()
@@ -247,8 +339,10 @@ class Command(BaseCommand):
             actor_map, needed_actors = fut_principals.result()
 
         for tconst, (rating, votes) in ratings.items():
-            movies_data[tconst]['rating'] = rating
-            movies_data[tconst]['num_votes'] = votes
+            target = movies_data.get(tconst) or episodes_data.get(tconst)
+            if target is not None:
+                target['rating'] = rating
+                target['num_votes'] = votes
         for tconst, ds in crew_dirs.items():
             movies_data[tconst]['director_nconsts'] = ds
         for tconst, ws in crew_writers.items():
@@ -307,20 +401,22 @@ class Command(BaseCommand):
             writer_objs = _id_map(Writer, 'imdb_id', needed_writers)
             actor_objs = _id_map(Actor, 'imdb_id', needed_actors)
 
-            # Movies (M2M relations are written separately below).
+            # Movies + series (M2M relations are written separately below).
             Movie.objects.bulk_create(
                 [Movie(
                     imdb_id=tconst,
+                    kind=data['kind'],
                     title=data['title'],
                     original_title=data['original_title'],
                     release_year=data['release_year'],
+                    end_year=data['end_year'],
                     rating=data['rating'],
                     num_votes=data['num_votes'],
                     duration=data['duration'],
                 ) for tconst, data in movies_data.items()],
                 update_conflicts=True,
-                update_fields=['title', 'original_title', 'release_year',
-                               'rating', 'num_votes', 'duration'],
+                update_fields=['kind', 'title', 'original_title', 'release_year',
+                               'end_year', 'rating', 'num_votes', 'duration'],
                 unique_fields=['imdb_id'],
                 batch_size=1000,
             )
@@ -336,10 +432,65 @@ class Command(BaseCommand):
             self._link_m2m(Movie.actors.through, 'actor_id', movie_objs, actor_objs,
                            movies_data, 'actor_nconsts')
 
+        # Episodes — written after the movies/series transaction has committed
+        # (so their parent pks are durable) and in bounded chunks. At full scale
+        # this is ~9M rows; materialising them all at once would exhaust RAM, so
+        # we drain episodes_data in place and never hold more than CHUNK objects.
+        n_movies = len(movies_data) - len(series_tconsts)
+        n_series = len(series_tconsts)
+        n_episodes = 0
+        if episodes_data:
+            # Free the movie-only intermediates before the big episode pass.
+            del (ratings, crew_dirs, crew_writers, actor_map, person_data,
+                 genre_objs, director_objs, writer_objs, actor_objs)
+            gc.collect()
+
+            self.stdout.write(f'Writing {len(episodes_data):,} episodes ...')
+            ep_fields = ['series_id', 'title', 'season_number', 'episode_number',
+                         'release_year', 'duration', 'rating', 'num_votes']
+            CHUNK = 50_000
+            batch = []
+            while episodes_data:
+                ep_tc, d = episodes_data.popitem()
+                parent_pk = movie_objs.get(d['parent'])
+                if parent_pk is not None:
+                    batch.append(Episode(
+                        imdb_id=ep_tc,
+                        series_id=parent_pk,
+                        title=d['title'] or f'Episode {ep_tc}',
+                        season_number=d['season'],
+                        episode_number=d['episode'],
+                        release_year=d['release_year'],
+                        duration=d['duration'],
+                        rating=d['rating'],
+                        num_votes=d['num_votes'],
+                    ))
+                if len(batch) >= CHUNK:
+                    n_episodes += self._write_episodes(batch, ep_fields)
+                    batch.clear()
+                    self.stdout.write(f'  {n_episodes:,} episodes written ...', ending='\r')
+                    self.stdout.flush()
+            if batch:
+                n_episodes += self._write_episodes(batch, ep_fields)
+            self.stdout.write(f'  {n_episodes:,} episodes written.    ')
+
         elapsed = time.perf_counter() - started
         self.stdout.write(self.style.SUCCESS(
-            f'Done. {len(movies_data):,} movies imported in {elapsed:.1f}s.'
+            f'Done. {n_movies:,} movies + {n_series:,} series '
+            f'+ {n_episodes:,} episodes imported in {elapsed:.1f}s.'
         ))
+
+    @staticmethod
+    def _write_episodes(batch, update_fields):
+        with transaction.atomic():
+            Episode.objects.bulk_create(
+                batch,
+                update_conflicts=True,
+                update_fields=update_fields,
+                unique_fields=['imdb_id'],
+                batch_size=1000,
+            )
+        return len(batch)
 
     @staticmethod
     def _link_m2m(through, col, movie_objs, related_objs, movies_data, key):

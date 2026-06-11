@@ -4,13 +4,13 @@ import urllib.parse
 import requests
 from django.contrib.auth import authenticate
 from django.contrib.auth.models import User
-from django.db.models import Case, F, IntegerField, Value, When
+from django.db.models import Case, Count, F, IntegerField, Value, When
 from ninja import NinjaAPI, Schema
 from ninja.security import HttpBearer
 from typing import List, Optional
 from django.conf import settings
 from django.shortcuts import get_object_or_404
-from app.models import Movie, Actor, Director, Genre, Writer, UserProfile
+from app.models import Movie, Actor, Director, Episode, Genre, Writer, UserProfile
 
 logger = logging.getLogger(__name__)
 
@@ -47,7 +47,9 @@ class MovieListSchema(Schema):
     title: str
     original_title: Optional[str] = None
     imdb_id: str
+    kind: str
     release_year: Optional[int] = None
+    end_year: Optional[int] = None
     rating: Optional[float] = None
     num_votes: Optional[int] = None
     duration: Optional[int] = None
@@ -59,7 +61,9 @@ class MovieDetailSchema(Schema):
     title: str
     original_title: Optional[str] = None
     imdb_id: str
+    kind: str
     release_year: Optional[int] = None
+    end_year: Optional[int] = None
     rating: Optional[float] = None
     num_votes: Optional[int] = None
     duration: Optional[int] = None
@@ -70,6 +74,22 @@ class MovieDetailSchema(Schema):
     writers: List[WriterSchema] = []
     genres: List[GenreSchema] = []
     actors: List[ActorSchema] = []
+
+class EpisodeSchema(Schema):
+    id: int
+    imdb_id: str
+    title: str
+    season_number: Optional[int] = None
+    episode_number: Optional[int] = None
+    release_year: Optional[int] = None
+    duration: Optional[int] = None
+    rating: Optional[float] = None
+    num_votes: Optional[int] = None
+    is_seen: bool
+
+class SeasonSchema(Schema):
+    season: Optional[int] = None
+    episode_count: int
 
 class MovieCreateSchema(Schema):
     title: str
@@ -149,9 +169,13 @@ def _sort_fields(sort: str):
 
 @api.get("/movie", response=List[MovieListSchema])
 def list_movies(request, q: str = None, limit: int = 50, offset: int = 0,
-                sort: str = 'votes', min_votes: int = 0, genre: str = None):
+                sort: str = 'votes', min_votes: int = 0, genre: str = None,
+                kind: str = 'movie'):
     limit = max(1, min(limit, 200))
     qs = Movie.objects.all()
+    # 'movie' / 'series' filter by kind; 'all' returns both.
+    if kind in (Movie.MOVIE, Movie.SERIES):
+        qs = qs.filter(kind=kind)
     if q:
         qs = qs.filter(title__icontains=q)
     if min_votes > 0:
@@ -178,6 +202,14 @@ def _fetch_poster_and_plot(movie: Movie):
     poster_url = None
     plot_summary = None
 
+    # TMDB uses different endpoints/fields for TV: tv_results vs movie_results,
+    # search/tv vs search/movie, and 'name'/'first_air_date_year' vs 'title'/'year'.
+    is_series = movie.kind == Movie.SERIES
+    find_key = 'tv_results' if is_series else 'movie_results'
+    search_path = 'search/tv' if is_series else 'search/movie'
+    title_field = 'name' if is_series else 'title'
+    year_param = 'first_air_date_year' if is_series else 'year'
+
     # 1. TMDB — find by IMDb ID (most reliable: exact ID match)
     try:
         data = requests.get(
@@ -185,7 +217,7 @@ def _fetch_poster_and_plot(movie: Movie):
             params={"api_key": settings.TMDB_API_KEY, "external_source": "imdb_id"},
             timeout=5,
         ).json()
-        result = (data.get('movie_results') or [None])[0]
+        result = (data.get(find_key) or [None])[0]
         if result:
             if result.get('poster_path'):
                 poster_url = f"https://image.tmdb.org/t/p/w500{result['poster_path']}"
@@ -199,14 +231,14 @@ def _fetch_poster_and_plot(movie: Movie):
         try:
             params = {"api_key": settings.TMDB_API_KEY, "query": movie.title}
             if movie.release_year:
-                params["year"] = movie.release_year
+                params[year_param] = movie.release_year
             data = requests.get(
-                "https://api.themoviedb.org/3/search/movie",
+                f"https://api.themoviedb.org/3/{search_path}",
                 params=params,
                 timeout=5,
             ).json()
             for result in (data.get('results') or []):
-                if not _title_matches(movie.title, result.get('title', '')):
+                if not _title_matches(movie.title, result.get(title_field, '')):
                     continue
                 if result.get('poster_path'):
                     poster_url = f"https://image.tmdb.org/t/p/w500{result['poster_path']}"
@@ -273,6 +305,33 @@ def get_movie(request, movie_id: int):
     if not movie.poster_url or not movie.plot_summary or movie.num_votes is None:
         _fetch_poster_and_plot(movie)
     return movie
+
+@api.get("/movie/{series_id}/seasons", response=List[SeasonSchema])
+def list_seasons(request, series_id: int):
+    """Distinct seasons of a series with per-season episode counts."""
+    series = get_object_or_404(Movie, id=series_id)
+    rows = (series.episodes
+            .values('season_number')
+            .annotate(episode_count=Count('id'))
+            .order_by('season_number'))
+    return [{'season': r['season_number'], 'episode_count': r['episode_count']}
+            for r in rows]
+
+@api.get("/movie/{series_id}/episodes", response=List[EpisodeSchema])
+def list_episodes(request, series_id: int, season: int = None,
+                  unseasoned: bool = False):
+    """Episodes of a series, ordered by season then episode number.
+
+    ``season=N`` filters to one season; ``unseasoned=true`` returns episodes
+    with no season number (specials etc.).
+    """
+    series = get_object_or_404(Movie, id=series_id)
+    qs = series.episodes.all()
+    if unseasoned:
+        qs = qs.filter(season_number__isnull=True)
+    elif season is not None:
+        qs = qs.filter(season_number=season)
+    return qs
 
 @api.post("/movie", response=MovieDetailSchema)
 def create_movie(request, payload: MovieCreateSchema):
@@ -393,13 +452,39 @@ def _detect_quality(name: str, title: str) -> str:
     return 'SD'
 
 
+# Friendly, actionable text for the Real-Debrid error codes users actually hit.
+RD_ERROR_HINTS = {
+    'infringing_file':    'This torrent is blocked by Real-Debrid (DMCA). Pick a different stream.',
+    'bad_token':          'Your Real-Debrid API key is invalid — update it in your profile.',
+    'permission_denied':  'Real-Debrid denied this request — check your account and API key.',
+    'hoster_unavailable': 'Real-Debrid can’t serve this torrent right now — try another stream.',
+    'too_many_requests':  'Real-Debrid is rate-limiting you — wait a moment and try again.',
+    'account_locked':     'Your Real-Debrid account is locked — resolve it on real-debrid.com.',
+}
+
+
 def _rd(method: str, path: str, key: str, **kwargs):
     r = requests.request(
         method, f'{RD_BASE}{path}',
         headers={'Authorization': f'Bearer {key}'},
         timeout=15, **kwargs
     )
-    r.raise_for_status()
+    if not r.ok:
+        # Surface Real-Debrid's own error instead of a bare HTTP status, so the
+        # caller can show something actionable rather than "Unexpected error".
+        err = ''
+        try:
+            err = r.json().get('error') or ''
+        except Exception:
+            pass
+        hint = RD_ERROR_HINTS.get(err)
+        if hint:
+            raise ValueError(hint)
+        detail = err or (r.text or '').strip()[:200] or f'HTTP {r.status_code}'
+        raise ValueError(f'Real-Debrid {path} failed ({r.status_code}): {detail}')
+    # Some endpoints (e.g. selectFiles) return 204 No Content.
+    if not r.content:
+        return {}
     return r.json()
 
 
@@ -411,9 +496,14 @@ _BROWSER_HEADERS = {
 }
 
 
-def _torrentio_streams(imdb_id: str) -> list:
+def _torrentio_streams(stream_type: str, stream_id: str) -> list:
+    """Fetch raw Torrentio streams.
+
+    ``stream_type`` is 'movie' (id = imdb id) or 'series' (id =
+    '<seriesImdbId>:<season>:<episode>').
+    """
     resp = requests.get(
-        f'https://torrentio.strem.fun/stream/movie/{imdb_id}.json',
+        f'https://torrentio.strem.fun/stream/{stream_type}/{stream_id}.json',
         headers=_BROWSER_HEADERS,
         timeout=10,
     )
@@ -460,25 +550,14 @@ def _rd_process(rd_key: str, info_hash: str, file_ids: list) -> dict:
     return {'url': best_url, 'filename': best_name}
 
 
-# GET /api/movie/{id}/streams  — list available streams with quality/language/cache info
-@api.get('/movie/{movie_id}/streams', auth=TokenAuth())
-def list_streams(request, movie_id: int):
-    movie   = get_object_or_404(Movie, id=movie_id)
-    profile = get_object_or_404(UserProfile, user=request.auth)
-    if not profile.rd_api_key:
-        return api.create_response(request, {'detail': 'No Real-Debrid key configured.'}, status=400)
-
-    try:
-        streams = _torrentio_streams(movie.imdb_id)
-    except Exception as e:
-        return api.create_response(request, {'detail': f'Torrentio error: {e}'}, status=502)
-
+def _stream_results(streams: list, rd_key: str) -> list:
+    """Annotate raw Torrentio streams with quality/language and RD cache info."""
     if not streams:
         return []
 
     hashes = list({s['infoHash'].lower() for s in streams if s.get('infoHash')})[:20]
     try:
-        avail = _rd('GET', f'/torrents/instantAvailability/{"/".join(hashes)}', profile.rd_api_key)
+        avail = _rd('GET', f'/torrents/instantAvailability/{"/".join(hashes)}', rd_key)
     except Exception:
         avail = {}
 
@@ -513,36 +592,85 @@ def list_streams(request, movie_id: int):
     return result
 
 
+# GET /api/movie/{id}/streams  — list available streams with quality/language/cache info
+@api.get('/movie/{movie_id}/streams', auth=TokenAuth())
+def list_streams(request, movie_id: int):
+    movie   = get_object_or_404(Movie, id=movie_id)
+    profile = get_object_or_404(UserProfile, user=request.auth)
+    if not profile.rd_api_key:
+        return api.create_response(request, {'detail': 'No Real-Debrid key configured.'}, status=400)
+
+    try:
+        streams = _torrentio_streams('movie', movie.imdb_id)
+    except Exception as e:
+        return api.create_response(request, {'detail': f'Torrentio error: {e}'}, status=502)
+
+    return _stream_results(streams, profile.rd_api_key)
+
+
+# GET /api/episode/{id}/streams  — Torrentio series streams for one episode
+@api.get('/episode/{episode_id}/streams', auth=TokenAuth())
+def list_episode_streams(request, episode_id: int):
+    episode = get_object_or_404(Episode.objects.select_related('series'), id=episode_id)
+    profile = get_object_or_404(UserProfile, user=request.auth)
+    if not profile.rd_api_key:
+        return api.create_response(request, {'detail': 'No Real-Debrid key configured.'}, status=400)
+    if episode.season_number is None or episode.episode_number is None:
+        return api.create_response(
+            request, {'detail': 'Episode has no season/episode number to stream.'}, status=400)
+
+    stream_id = f'{episode.series.imdb_id}:{episode.season_number}:{episode.episode_number}'
+    try:
+        streams = _torrentio_streams('series', stream_id)
+    except Exception as e:
+        return api.create_response(request, {'detail': f'Torrentio error: {e}'}, status=502)
+
+    return _stream_results(streams, profile.rd_api_key)
+
+
 # POST /api/movie/{id}/stream  — process a specific stream through RD
 class StreamRequestSchema(Schema):
     info_hash: str
     file_ids:  List[str] = []
 
 
+def _process_stream(request, rd_key: str, payload: StreamRequestSchema, label: str):
+    """Run a selected stream through Real-Debrid, returning {url, filename}."""
+    if not rd_key:
+        return api.create_response(request, {'detail': 'No Real-Debrid key configured.'}, status=400)
+    try:
+        return _rd_process(rd_key, payload.info_hash, payload.file_ids)
+    except ValueError as e:
+        # Includes RD API errors and our own timeout/no-link messages.
+        return api.create_response(request, {'detail': str(e)}, status=502)
+    except requests.RequestException as e:
+        logger.warning('RD network error for %s: %s', label, e)
+        return api.create_response(request, {'detail': f'Real-Debrid network error: {e}'}, status=502)
+    except Exception as e:
+        logger.exception('RD stream error for %s', label)
+        return api.create_response(request, {'detail': f'Unexpected error: {e}'}, status=500)
+
+
 @api.post('/movie/{movie_id}/stream', auth=TokenAuth())
 def stream_movie(request, movie_id: int, payload: StreamRequestSchema):
     movie   = get_object_or_404(Movie, id=movie_id)
     profile = get_object_or_404(UserProfile, user=request.auth)
-    if not profile.rd_api_key:
-        return api.create_response(request, {'detail': 'No Real-Debrid key configured.'}, status=400)
-    try:
-        result = _rd_process(profile.rd_api_key, payload.info_hash, payload.file_ids)
-        return result
-    except ValueError as e:
-        return api.create_response(request, {'detail': str(e)}, status=502)
-    except Exception as e:
-        logger.error('RD stream error for %s: %s', movie.imdb_id, e)
-        return api.create_response(request, {'detail': 'Unexpected error.'}, status=500)
+    return _process_stream(request, profile.rd_api_key, payload, movie.imdb_id)
 
 
-# GET /api/movie/{id}/subtitles?language=cs  — search OpenSubtitles (no key needed)
+@api.post('/episode/{episode_id}/stream', auth=TokenAuth())
+def stream_episode(request, episode_id: int, payload: StreamRequestSchema):
+    episode = get_object_or_404(Episode, id=episode_id)
+    profile = get_object_or_404(UserProfile, user=request.auth)
+    return _process_stream(request, profile.rd_api_key, payload, episode.imdb_id)
+
+
+# GET /api/movie|episode/{id}/subtitles?language=cs  — search OpenSubtitles (no key needed)
 OSUB_LANG = {'cs': 'cze', 'sk': 'slo', 'en': 'eng'}
 
-@api.get('/movie/{movie_id}/subtitles', auth=None)
-def list_subtitles(request, movie_id: int, language: str = 'en'):
-    movie = get_object_or_404(Movie, id=movie_id)
+def _opensubtitles_search(request, imdb_id: str, language: str):
     lang3 = OSUB_LANG.get(language, 'eng')
-    imdb_num = movie.imdb_id.replace('tt', '')
+    imdb_num = imdb_id.replace('tt', '')
     try:
         resp = requests.get(
             f'https://rest.opensubtitles.org/search/imdbid-{imdb_num}/sublanguageid-{lang3}',
@@ -570,6 +698,18 @@ def list_subtitles(request, movie_id: int, language: str = 'en'):
             'format':   item.get('SubFormat', 'srt'),
         })
     return results
+
+
+@api.get('/movie/{movie_id}/subtitles', auth=None)
+def list_subtitles(request, movie_id: int, language: str = 'en'):
+    movie = get_object_or_404(Movie, id=movie_id)
+    return _opensubtitles_search(request, movie.imdb_id, language)
+
+
+@api.get('/episode/{episode_id}/subtitles', auth=None)
+def list_episode_subtitles(request, episode_id: int, language: str = 'en'):
+    episode = get_object_or_404(Episode, id=episode_id)
+    return _opensubtitles_search(request, episode.imdb_id, language)
 
 
 def _decode_subtitle(raw: bytes) -> str:
@@ -703,9 +843,8 @@ def _subtitle_to_vtt(text: str) -> str:
     return 'WEBVTT\n\n' + body
 
 
-# GET /api/movie/{id}/subtitle-proxy?url=...  — proxy + convert any text format → VTT
-@api.get('/movie/{movie_id}/subtitle-proxy', auth=None)
-def subtitle_proxy(request, movie_id: int, url: str):
+# GET /api/movie|episode/{id}/subtitle-proxy?url=...  — proxy + convert any text format → VTT
+def _subtitle_proxy(request, url: str):
     """Download subtitle, convert SRT/MicroDVD/MPL2/SubViewer to WebVTT."""
     from django.http import HttpResponse
     import gzip as gz
@@ -724,6 +863,16 @@ def subtitle_proxy(request, movie_id: int, url: str):
 
     vtt = _subtitle_to_vtt(raw_text)
     return HttpResponse(vtt, content_type='text/vtt; charset=utf-8')
+
+
+@api.get('/movie/{movie_id}/subtitle-proxy', auth=None)
+def subtitle_proxy(request, movie_id: int, url: str):
+    return _subtitle_proxy(request, url)
+
+
+@api.get('/episode/{episode_id}/subtitle-proxy', auth=None)
+def episode_subtitle_proxy(request, episode_id: int, url: str):
+    return _subtitle_proxy(request, url)
 
 
 # --- Auth endpoints ---

@@ -14,6 +14,7 @@ const query = ref('')
 const sort = ref('votes')
 const minVotes = ref(5000)
 const genre = ref(null)
+const kind = ref('movie')   // 'movie' | 'series' | 'all'
 const loading = ref(false)
 const error = ref('')
 const offset = ref(0)
@@ -31,6 +32,12 @@ const SORT_OPTIONS = [
     { value: 'title_asc',     label: 'A → Z' },
     { value: 'title_desc',    label: 'Z → A' },
     { value: 'seen',          label: 'Seen first' },
+]
+
+const KIND_FILTERS = [
+    { value: 'movie',  label: 'Movies' },
+    { value: 'series', label: 'Series' },
+    { value: 'all',    label: 'All' },
 ]
 
 const VOTE_FILTERS = [
@@ -51,7 +58,7 @@ async function load(reset = true) {
     loading.value = true
     error.value = ''
     try {
-        const params = new URLSearchParams({ limit: String(LIMIT), offset: String(offset.value), sort: sort.value, min_votes: String(minVotes.value) })
+        const params = new URLSearchParams({ limit: String(LIMIT), offset: String(offset.value), sort: sort.value, min_votes: String(minVotes.value), kind: kind.value })
         if (genre.value) params.set('genre', genre.value)
         if (query.value.trim()) params.set('q', query.value.trim())
         const res = await fetch(`/api/movie?${params}`)
@@ -95,10 +102,18 @@ onMounted(() => { load(); loadGenres() })
 <template>
     <div class="list-wrap">
         <form class="search-bar" @submit.prevent="load(true)">
-            <input v-model="query" type="text" placeholder="Search movies…" />
+            <input v-model="query" type="text" placeholder="Search titles…" />
         </form>
 
         <div class="filter-row">
+            <div class="filter-group">
+                <span class="filter-label">Type</span>
+                <div class="chip-bar">
+                    <button v-for="opt in KIND_FILTERS" :key="opt.value" class="chip"
+                        :class="{ active: kind === opt.value }"
+                        @click="kind = opt.value; load(true)">{{ opt.label }}</button>
+                </div>
+            </div>
             <div class="filter-group">
                 <span class="filter-label">Sort</span>
                 <div class="chip-bar">
@@ -144,11 +159,11 @@ onMounted(() => { load(); loadGenres() })
             </RouterLink>
         </div>
 
-        <p v-else-if="!loading" class="msg-empty">No movies found.</p>
+        <p v-else-if="!loading" class="msg-empty">No titles found.</p>
 
         <div class="load-more">
             <button v-if="hasMore" class="btn-more" :disabled="loading" @click="load(false)">
-                {{ loading ? 'Loading…' : '… more movies …' }}
+                {{ loading ? 'Loading…' : '… more …' }}
             </button>
             <p v-else-if="movies.length" class="msg-end">— end of list —</p>
         </div>

@@ -40,10 +40,17 @@ def fetch_wikipedia_data(person_name):
 
 
 def render_home(request):
-    movie_list = Movie.objects.all().order_by('-release_year', 'title')
+    # ?kind=movie|series filters by type; anything else ('all') shows both.
+    kind = request.GET.get('kind', Movie.MOVIE)
+    movie_list = Movie.objects.all()
+    if kind in (Movie.MOVIE, Movie.SERIES):
+        movie_list = movie_list.filter(kind=kind)
+    else:
+        kind = 'all'
+    movie_list = movie_list.order_by('-release_year', 'title')
     paginator = Paginator(movie_list, 20)
     page_obj = paginator.get_page(request.GET.get('page'))
-    return render(request, 'home.html', {'page_obj': page_obj})
+    return render(request, 'home.html', {'page_obj': page_obj, 'kind': kind})
 
 
 def render_movie_detail(request, movie_id):
@@ -55,18 +62,20 @@ def render_movie_detail(request, movie_id):
     poster_url = None
     plot_summary = None
 
+    # TMDB returns series under 'tv_results', movies under 'movie_results'.
+    results_key = 'tv_results' if movie.kind == Movie.SERIES else 'movie_results'
     tmdb_url = f"https://api.themoviedb.org/3/find/{movie.imdb_id}?api_key={settings.TMDB_API_KEY}&external_source=imdb_id"
     try:
         response = requests.get(tmdb_url, timeout=3)
         if response.status_code == 200:
             data = response.json()
-            movie_results = data.get('movie_results', [])
-            if movie_results:
-                tmdb_movie = movie_results[0]
-                if tmdb_movie.get('poster_path'):
-                    poster_url = f"https://image.tmdb.org/t/p/w500{tmdb_movie['poster_path']}"
-                if tmdb_movie.get('overview'):
-                    plot_summary = tmdb_movie['overview']
+            tmdb_results = data.get(results_key, [])
+            if tmdb_results:
+                tmdb_item = tmdb_results[0]
+                if tmdb_item.get('poster_path'):
+                    poster_url = f"https://image.tmdb.org/t/p/w500{tmdb_item['poster_path']}"
+                if tmdb_item.get('overview'):
+                    plot_summary = tmdb_item['overview']
     except Exception as e:
         logger.warning("TMDB error: %s", e)
 

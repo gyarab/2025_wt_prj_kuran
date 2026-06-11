@@ -11,8 +11,18 @@ const movie = ref(null)
 const loading = ref(false)
 const error = ref('')
 
+// series episodes
+const isSeries = computed(() => movie.value?.kind === 'series')
+const seasons = ref([])             // [{ season, episode_count }]
+const selectedSeason = ref(null)    // a season number, or 'none' for unseasoned
+const episodes = ref([])
+const episodesLoading = ref(false)
+const pad = (n) => String(n).padStart(2, '0')
+
 // streaming
 const showPicker    = ref(false)
+const streamBase    = ref('')   // API prefix for the chosen title: /api/movie/N or /api/episode/N
+const streamTitle   = ref('')
 const streamUrl     = ref('')
 const streamName    = ref('')
 const streamQuality = ref('')
@@ -35,11 +45,49 @@ async function load(id) {
         const data = await res.json()
         if (seq !== loadSeq) return   // navigated to another movie; discard
         movie.value = data
+        seasons.value = []
+        episodes.value = []
+        selectedSeason.value = null
+        if (data.kind === 'series') loadSeasons(data.id, seq)
     } catch (e) {
         if (seq === loadSeq) error.value = e.message
     } finally {
         if (seq === loadSeq) loading.value = false
     }
+}
+
+async function loadSeasons(id, seq) {
+    try {
+        const res = await fetch(`/api/movie/${id}/seasons`)
+        if (!res.ok || seq !== loadSeq) return
+        seasons.value = await res.json()
+        if (seasons.value.length) {
+            const first = seasons.value[0]
+            selectSeason(first.season === null ? 'none' : first.season)
+        }
+    } catch { /* silent */ }
+}
+
+async function loadEpisodes(id, seq) {
+    episodesLoading.value = true
+    try {
+        const params = new URLSearchParams()
+        if (selectedSeason.value === 'none') params.set('unseasoned', 'true')
+        else if (selectedSeason.value !== null) params.set('season', String(selectedSeason.value))
+        const res = await fetch(`/api/movie/${id}/episodes?${params}`)
+        const data = res.ok ? await res.json() : []
+        if (seq !== loadSeq) return   // navigated away; discard
+        episodes.value = data
+    } catch {
+        episodes.value = []
+    } finally {
+        episodesLoading.value = false
+    }
+}
+
+function selectSeason(s) {
+    selectedSeason.value = s
+    loadEpisodes(movie.value.id, loadSeq)
 }
 
 async function toggleSeen() {
@@ -63,10 +111,22 @@ const imdbUrl = computed(() =>
     movie.value ? `https://www.imdb.com/title/${movie.value.imdb_id}/` : '#'
 )
 
-function play() {
+function openPicker(base, title) {
     if (!isLoggedIn.value) { router.push('/login'); return }
     if (!hasRdKey.value)   { router.push('/profile'); return }
-    showPicker.value = true
+    streamBase.value  = base
+    streamTitle.value = title
+    showPicker.value  = true
+}
+
+function play() {
+    openPicker(`/api/movie/${movie.value.id}`, movie.value.title)
+}
+
+function playEpisode(ep) {
+    const code = (ep.season_number != null && ep.episode_number != null)
+        ? `S${pad(ep.season_number)}E${pad(ep.episode_number)} · ` : ''
+    openPicker(`/api/episode/${ep.id}`, `${movie.value.title} — ${code}${ep.title}`)
 }
 
 function onStreamReady({ url, filename, quality, subtitleUrl: sub, subtitleLang: subLang }) {
@@ -135,8 +195,8 @@ watch(() => route.params.id, load, { immediate: true })
     <Teleport to="body">
         <StreamPicker
             v-if="showPicker"
-            :movie-id="movie?.id"
-            :movie-title="movie?.title"
+            :base="streamBase"
+            :title="streamTitle"
             @play="onStreamReady"
             @close="showPicker = false"
         />
@@ -147,7 +207,7 @@ watch(() => route.params.id, load, { immediate: true })
         <div v-if="streamUrl" class="player-overlay" @click.self="closePlayer">
             <div class="player-box">
                 <div class="player-header">
-                    <span class="player-title">{{ streamName || movie?.title }}</span>
+                    <span class="player-title">{{ streamName || streamTitle || movie?.title }}</span>
                     <span v-if="streamQuality" class="player-quality">{{ streamQuality }}</span>
                     <button class="player-close" @click="closePlayer">✕</button>
                 </div>
@@ -233,7 +293,8 @@ watch(() => route.params.id, load, { immediate: true })
                     </div>
 
                     <div class="actions">
-                        <button class="btn-play" @click="play">▶ Play</button>
+                        <!-- Series play per-episode (below); movies play here. -->
+                        <button v-if="!isSeries" class="btn-play" @click="play">▶ Play</button>
                         <button class="btn-seen" :class="{ seen: movie.is_seen }" @click="toggleSeen">
                             {{ movie.is_seen ? '✓ Seen' : 'Mark as seen' }}
                         </button>
@@ -243,6 +304,32 @@ watch(() => route.params.id, load, { immediate: true })
 
             <!-- More info -->
             <div class="more-info">
+                <section v-if="isSeries" class="section">
+                    <h3 class="section-title">Episodes</h3>
+
+                    <div v-if="seasons.length" class="chip-bar season-bar">
+                        <button v-for="s in seasons" :key="s.season ?? 'none'" class="chip"
+                            :class="{ active: (s.season === null ? 'none' : s.season) === selectedSeason }"
+                            @click="selectSeason(s.season === null ? 'none' : s.season)">
+                            {{ s.season === null ? 'Other' : 'Season ' + s.season }}
+                            <span class="chip-count">{{ s.episode_count }}</span>
+                        </button>
+                    </div>
+
+                    <p v-if="episodesLoading" class="ep-msg">Loading episodes…</p>
+                    <ul v-else-if="episodes.length" class="ep-list">
+                        <li v-for="ep in episodes" :key="ep.id" class="ep-row" :class="{ seen: ep.is_seen }">
+                            <span class="ep-num">{{ ep.season_number != null && ep.episode_number != null
+                                ? `S${pad(ep.season_number)}E${pad(ep.episode_number)}` : '—' }}</span>
+                            <span class="ep-title">{{ ep.title }}</span>
+                            <span v-if="ep.rating" class="ep-rating">★ {{ ep.rating }}</span>
+                            <span v-if="ep.release_year" class="ep-year">{{ ep.release_year }}</span>
+                            <button class="ep-play" @click="playEpisode(ep)" title="Play episode">▶</button>
+                        </li>
+                    </ul>
+                    <p v-else class="ep-msg">No episodes found.</p>
+                </section>
+
                 <section v-if="movie.actors.length" class="section">
                     <h3 class="section-title">Cast</h3>
                     <div class="cast-grid">
@@ -418,6 +505,48 @@ watch(() => route.params.id, load, { immediate: true })
     transition: border-color 0.15s, color 0.15s;
 }
 .cast-chip:hover { border-color: #666; color: #fff; }
+
+/* Episodes */
+.chip-bar { display: flex; flex-wrap: wrap; gap: 7px; }
+.season-bar { margin-bottom: 20px; }
+
+.chip {
+    display: inline-flex; align-items: center; gap: 8px;
+    background: #1a1a1a; border: 1px solid #2a2a2a; color: #888;
+    font-size: 0.82rem; padding: 7px 16px; border-radius: 24px;
+    transition: border-color 0.15s, color 0.15s;
+}
+.chip:hover { border-color: #555; color: #ccc; }
+.chip.active { border-color: #e50914; color: #e5e5e5; }
+.chip-count {
+    font-size: 0.72rem; color: #666;
+    background: #000; border-radius: 12px; padding: 1px 8px;
+}
+.chip.active .chip-count { color: #aaa; }
+
+.ep-list { list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; }
+.ep-row {
+    display: flex; align-items: baseline; gap: 14px;
+    padding: 12px 8px; border-bottom: 1px solid #1a1a1a;
+    font-size: 0.92rem;
+}
+.ep-row:hover { background: #141414; }
+.ep-num {
+    flex-shrink: 0; width: 72px; color: #777;
+    font-variant-numeric: tabular-nums; font-size: 0.82rem;
+}
+.ep-title { flex: 1; min-width: 0; color: #ccc; }
+.ep-rating { flex-shrink: 0; color: #f5c518; font-size: 0.82rem; }
+.ep-year { flex-shrink: 0; color: #555; font-size: 0.82rem; width: 40px; text-align: right; }
+.ep-play {
+    flex-shrink: 0;
+    background: transparent; border: 1px solid #333; color: #aaa;
+    border-radius: 6px; padding: 5px 12px; font-size: 0.82rem;
+    transition: border-color 0.15s, color 0.15s, background 0.15s;
+}
+.ep-play:hover { border-color: #e50914; color: #fff; background: #e50914; }
+.ep-row.seen .ep-title { color: #6a6a6a; }
+.ep-msg { color: #444; font-size: 0.9rem; padding: 12px 0; }
 
 .details-table { display: flex; flex-direction: column; gap: 14px; }
 
